@@ -1,0 +1,72 @@
+=== Simple Problems Results ===
+
+Problem: quadratic
+Algorithm: BasicSR
+Expression: (exp((x0 + cos(3.0))) / (10.0 + 5.0))
+Adjusted expression: ((exp((x0 + cos(3.0))) / (10.0 + 5.0))) * 16.4487 + 16.3194
+MSE: 107.9627428424
+Size: 9
+Time: 0.80 seconds
+
+Problem: quadratic
+Algorithm: PySR
+Expression: 2.0*x0*(x0 + 1.4999999) + 0.99999994
+MSE: 0.0000000000
+Time: 6.75 seconds
+
+Problem: cubic
+Algorithm: BasicSR
+Expression: ((x0 + cos((x0 + 0.5))) * 0.5)
+Adjusted expression: (((x0 + cos((x0 + 0.5))) * 0.5)) * 13.3082 + -7.8480
+MSE: 15.4715066347
+Size: 8
+Time: 0.39 seconds
+
+Problem: cubic
+Algorithm: PySR
+Expression: x0*(0.99314130184868 - x0)*(1.006865 - x0)
+MSE: 0.0000000050
+Time: 0.43 seconds
+
+Problem: simple_rational
+Algorithm: BasicSR
+Expression: cos(x0)
+Adjusted expression: (cos(x0)) * 1.4987 + 1.6650
+MSE: 0.4008260760
+Size: 2
+Time: 0.20 seconds
+
+Problem: simple_rational
+Algorithm: PySR
+Expression: 1.9709035*cos(x0) + cos(sin(x0)) + 1.2589917
+MSE: 0.1047107251
+Time: 0.48 seconds
+
+Problem: simple_physics
+Algorithm: BasicSR
+Expression: exp(((x1 * x0) + (x1 + x1)))
+Adjusted expression: (exp(((x1 * x0) + (x1 + x1)))) * 89.3120 + 69.1510
+MSE: 55986339026640228968285764988228984871816527872.0000000000
+Size: 8
+Time: 0.41 seconds
+
+Problem: simple_physics
+Algorithm: PySR
+Expression: 0.499789813393977*x0*x1**2
+MSE: 0.0022546001
+Time: 0.45 seconds
+
+Problem: simple_trig
+Algorithm: BasicSR
+Expression: sin(x0)
+Adjusted expression: (sin(x0)) * 1.6740 + -0.2329
+MSE: 0.6639803735
+Size: 2
+Time: 0.17 seconds
+
+Problem: simple_trig
+Algorithm: PySR
+Expression: 2.0*sin(x0) + cos(2*x0)
+MSE: 0.0000000000
+Time: 0.47 seconds
+
