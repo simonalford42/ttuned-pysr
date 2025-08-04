@@ -1,0 +1,21 @@
+Problem Splits for Transformer Training
+==================================================
+
+TRAIN SET (6 problems):
+  1. mixed_polynomial: Mixed polynomial: y = x0^2 - x0*x1 + x1^2
+  2. cubic: Simple cubic function: y = x^3 - x^2 - x^2 + x (avoiding constant 2)
+  3. quartic: Quartic polynomial: y = x^4 - x^3 + x^2
+  4. quadratic: Simple quadratic function: y = x^2 + x + 1
+  5. trivariate_product: Trivariate product: y = x0 * x1 * x2
+  6. simple_rational: Simple rational function: y = 1 / (1 + x^2)
+
+VAL SET (2 problems):
+  1. complex_rational: Complex rational: y = (x1 + x2) / (x1 - x2 + 1) (using constant 1)
+  2. rational_division: Rational function: y = x / (x + 1)
+
+TEST SET (2 problems):
+  1. bivariate_product: Bivariate product: y = x0 * x1^2
+  2. bivariate_sum: Bivariate sum: y = x0^2 + x1^2
+
+Total problems: 10
+Split ratios: Train=60.0%, Val=20.0%, Test=20.0%
