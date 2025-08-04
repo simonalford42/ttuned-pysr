@@ -227,3 +227,10 @@ Next steps:
 7. Try training on a small dataset and make sure train accuracy goes to 100%. Make sure we're logging all of the important metrics (hopefully stream of search already does the good stuff, but we might have to add more stuff)
 
 Approach: to use stuff from stream of search repo, copy files into our repo.
+
+alright, next lets try getting the stream of search training code working. based on readme.md info, can you make a first pass at copying over stream of search training files so that we can run the   │
+│   same code on our trajectories collected from minimalSR implementation. the key things will be getting the training data format right. To start, just get the current stream of search working on our training data, and let us watch the
+
+Integration stream of search new plan:
+1. Copy over files, hook up our data. Make sure we can run training a really small model on our data, and view the results in wandb.
+2. Change the training so that instead of full sequence completion, we sample len(population) from the first.
