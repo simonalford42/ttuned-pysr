@@ -3,7 +3,7 @@ import random
 import json
 import os
 from datetime import datetime
-from simple_problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
+from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
 
 
 class Node:
@@ -221,15 +221,15 @@ class MinimalSR:
             return parent1
 
         return child
-    
+
     def record_population_state(self, population, fitnesses, generation):
         """Record the current population state (only if collect_trajectory=True)"""
         if not self.collect_trajectory:
             return
-            
+
         # Convert population to string representations for storage
         expressions = [str(ind) for ind in population]
-        
+
         state = {
             'generation': generation,
             'population_size': len(population),
@@ -240,7 +240,7 @@ class MinimalSR:
             'avg_fitness': np.mean(fitnesses),
             'population_diversity': len(set(expressions))  # Number of unique expressions
         }
-        
+
         self.trajectory.append(state)
 
     def fit(self, X, y):
@@ -250,7 +250,7 @@ class MinimalSR:
 
         best_fitness = -float('inf')
         best_individual = None
-        
+
         # Reset trajectory for new run
         if self.collect_trajectory:
             self.trajectory = []
@@ -262,7 +262,7 @@ class MinimalSR:
             # Evaluate fitness
             fitnesses = [self.fitness(ind, X, y) for ind in population]
             fitnesses = np.array(fitnesses)
-            
+
             # Record current state (if trajectory collection is enabled)
             self.record_population_state(population, fitnesses, generation)
 
@@ -309,14 +309,14 @@ class MinimalSR:
         if self.best_model_ is None:
             raise ValueError("Model not fitted yet")
         return self.best_model_.evaluate(X)
-    
+
     def save_trajectory(self, filename):
         """Save the collected trajectory to a JSON file"""
         if not self.collect_trajectory:
             raise ValueError("Trajectory collection was not enabled. Set collect_trajectory=True when initializing.")
-            
+
         os.makedirs('data', exist_ok=True)
-        
+
         trajectory_data = {
             'metadata': {
                 'timestamp': datetime.now().isoformat(),
@@ -329,11 +329,11 @@ class MinimalSR:
             },
             'trajectory': self.trajectory
         }
-        
+
         filepath = os.path.join('data', filename)
         with open(filepath, 'w') as f:
             json.dump(trajectory_data, f, indent=2)
-        
+
         print(f"Trajectory saved to {filepath}")
         return filepath
 
