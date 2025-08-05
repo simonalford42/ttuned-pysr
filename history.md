@@ -51,3 +51,40 @@ Successfully reorganized the codebase and ran updated analysis:
    - BasicSR successfully finds exact solutions for simpler mathematical relationships
    - More complex relationships (compound fractions, surface area approximations) remain challenging
    - The updated implementation properly uses both time limits and MSE thresholds
+
+## Trajectory Collection System Implementation
+
+Successfully implemented comprehensive trajectory collection system for BasicSR:
+
+1. **Fixed collect_trajectories.py**:
+   - Rewrote to use BasicSR.fit() instead of manual evolution loop
+   - Now leverages built-in record_population_state() method for consistent data format
+   - Generates rich trajectory data with full population information per generation
+   - Replaced compound_fraction with mixed_polynomial to avoid local optima issues
+
+2. **Enhanced BasicSR trajectory collection**:
+   - Added collect_trajectory parameter to enable/disable trajectory recording
+   - record_population_state() captures complete population state including:
+     - All expressions and their fitnesses
+     - Population diversity metrics
+     - Best individual per generation
+     - Average fitness statistics
+
+3. **Configured for harder problems**:
+   - Set up collection for 5 harder problems: pythagorean_3d, quadratic_formula_discriminant, polynomial_product, mixed_polynomial, surface_area_sphere_approx
+   - Parameters: 60 seconds per problem, 2 runs per problem
+   - Population size 20 for good trajectory granularity
+   - Generates comprehensive metadata and summary statistics
+
+4. **Data format standardization**:
+   - Trajectory data now matches test_single_trajectory format
+   - Contains complete population evolution history
+   - Includes problem metadata, timing information, and final results
+   - Saves both combined and individual problem trajectory files
+
+5. **Verification results**:
+   - Simple problems (y=x) solve in generation 0 due to MSE early stopping (correct behavior)
+   - Complex problems show proper multi-generation evolution
+   - Trajectory collection system generates rich training data for future ML models
+
+The system is now ready to collect comprehensive evolutionary trajectory data for symbolic regression research and training purposes.
