@@ -1,0 +1,113 @@
+_wandb:
+    value:
+        cli_version: 0.21.0
+        e:
+            dgdh87g5pb4d13vfhzwwckujjajb6f7n:
+                args:
+                    - --config
+                    - minimalsr-config.json
+                codePath: training/train.py
+                codePathLocal: train.py
+                cpu_count: 56
+                cpu_count_logical: 56
+                cudaVersion: "12.8"
+                disk:
+                    /:
+                        total: "85832237056"
+                        used: "36018569216"
+                email: simonalford42@gmail.com
+                executable: /home/sca63/.conda/envs/ttsr/bin/python
+                git:
+                    commit: aaa2b3e647139c93296c3124e692c2d7eadeee91
+                    remote: https://github.com/simonalford42/ttuned-pysr.git
+                gpu: NVIDIA GeForce RTX 3090
+                gpu_count: 1
+                gpu_nvidia:
+                    - architecture: Ampere
+                      cudaCores: 10496
+                      memoryTotal: "25769803776"
+                      name: NVIDIA GeForce RTX 3090
+                      uuid: GPU-87eb9131-141b-d542-d6f9-1457a2a7b348
+                host: ellis-compute-01.coecis.cornell.edu
+                memory:
+                    total: "270095884288"
+                os: Linux-6.8.0-63-generic-x86_64-with-glibc2.39
+                program: /home/sca63/ttuned-pysr/training/train.py
+                python: CPython 3.12.11
+                root: ./wandb
+                slurm:
+                    job_id: "41022"
+                startedAt: "2025-08-04T20:39:43.751903Z"
+                writerId: dgdh87g5pb4d13vfhzwwckujjajb6f7n
+        m: []
+        python_version: 3.12.11
+        t:
+            "1":
+                - 1
+                - 11
+                - 49
+                - 51
+                - 71
+            "2":
+                - 1
+                - 11
+                - 49
+                - 51
+                - 71
+            "3":
+                - 13
+                - 16
+            "4": 3.12.11
+            "5": 0.21.0
+            "6": 4.54.1
+            "12": 0.21.0
+            "13": linux-x86_64
+batch_size:
+    value: 2
+context_length:
+    value: 2048
+data_dir:
+    value: ../data
+eval_steps:
+    value: 50
+gradient_accumulation_steps:
+    value: 1
+log_steps:
+    value: 10
+lr:
+    value: 5e-05
+lr_scheduler_type:
+    value: linear
+model_config:
+    value: gpt-neo-tiny.json
+name:
+    value: minimalsr-tiny
+num_train:
+    value: 100
+num_train_epochs:
+    value: 3
+output_dir:
+    value: ./checkpoints
+save_steps:
+    value: 100
+save_total_limit:
+    value: 3
+seed:
+    value: 42
+train_file:
+    value: train_trajectories.jsonl
+train_type:
+    value: sft
+val_file:
+    value: val_trajectories.jsonl
+val_target_file:
+    value: val_trajectories.jsonl
+wandb:
+    value:
+        dir: ./wandb
+        entity: ""
+        project: minimalsr-transformer
+warmup_steps:
+    value: 10
+weight_decay:
+    value: 0.01
