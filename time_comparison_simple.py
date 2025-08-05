@@ -16,7 +16,7 @@ def run_timed_experiment(problem, time_limit_seconds, seed=42):
 
     # Create model
     model = MinimalSR(
-        population_size=100,
+        population_size=10,
         num_generations=10000,  # Will be stopped by time limit
         max_depth=5,
         max_size=20,
@@ -146,8 +146,8 @@ def full_comparison():
     """Run each harder problem for 5 minutes and track improvement trajectory"""
 
     print("IMPROVEMENT TRAJECTORY ANALYSIS")
-    print("Running each problem for 1 minute and tracking progress...")
-    print(f"Testing {len(HARDER_PROBLEMS)} problems × 1 minute each = ~5 minutes total")
+    print("Running each problem for 15 seconds and tracking progress...")
+    print(f"Testing {len(HARDER_PROBLEMS)} problems × 15 seconds each = ~75 seconds total")
 
     all_results = []
 
@@ -155,8 +155,8 @@ def full_comparison():
         print(f"\nProblem {i+1}/{len(HARDER_PROBLEMS)}: {problem.__name__}")
         print(f"Ground truth: {problem.__doc__}")
 
-        # Run for 1 minute and track trajectory
-        result = run_timed_experiment(problem, time_limit_seconds=60, seed=42)
+        # Run for 15 seconds and track trajectory
+        result = run_timed_experiment(problem, time_limit_seconds=15, seed=42)
         all_results.append(result)
 
         # Show trajectory summary
@@ -194,7 +194,7 @@ def create_markdown_table(results):
     """Create markdown table focusing on improvement trajectories"""
 
     markdown = "# Improvement Trajectory Analysis\n\n"
-    markdown += "Each problem was run for 1 minute to track how the algorithm discovers mathematical structure over time.\n\n"
+    markdown += "Each problem was run for 15 seconds to track how the algorithm discovers mathematical structure over time.\n\n"
 
     for result in results:
         problem_name = result['problem']
@@ -259,7 +259,7 @@ if __name__ == "__main__":
     print("Improvement Trajectory Analysis")
     print("===============================")
     print()
-    print("Running full analysis on all 5 harder problems (1 minute each)...")
+    print("Running full analysis on all 5 harder problems (15 seconds each)...")
 
     # Run full comparison automatically
     results = full_comparison()
@@ -267,6 +267,6 @@ if __name__ == "__main__":
     # Generate markdown
     if results:
         markdown = create_markdown_table(results)
-        with open('improvement_trajectories.md', 'w') as f:
+        with open('improvement_trajectories_n10.md', 'w') as f:
             f.write(markdown)
-        print(f"\nMarkdown analysis saved to improvement_trajectories.md")
+        print(f"\nMarkdown analysis saved to improvement_trajectories_n10.md")

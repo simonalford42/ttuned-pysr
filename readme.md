@@ -234,3 +234,5 @@ alright, next lets try getting the stream of search training code working. based
 Integration stream of search new plan:
 1. Copy over files, hook up our data. Make sure we can run training a really small model on our data, and view the results in wandb.
 2. Change the training so that instead of full sequence completion, we sample len(population) from the first.
+
+I think I need to make the population size smaller. Only consider
