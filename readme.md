@@ -236,3 +236,12 @@ Integration stream of search new plan:
 2. Change the training so that instead of full sequence completion, we sample len(population) from the first.
 
 I think I need to make the population size smaller. Only consider
+
+
+Current situation:
+- I think the trajectory collection was messed up. The saved jsons look awful. The correct format of the trajectory should be a json with fields
+
+Refactor MinimalSR so that:
+(1) it is called BasicSR, not MinimalSR
+(2) it has a time limit argument, so you can run for 15 seconds
+(3) it stops running if mse reaches zero (or 1e-31 or similar "floating point error small" number)

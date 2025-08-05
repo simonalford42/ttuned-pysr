@@ -2,8 +2,8 @@ import numpy as np
 import random
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS
 
-# Import the Node class and MinimalSR from the updated file
-from minimal_sr import Node, MinimalSR
+# Import the Node class and BasicSR from the updated file
+from basic_sr import Node, BasicSR
 
 
 def test_initial_vs_evolved():
@@ -30,7 +30,7 @@ def test_initial_vs_evolved():
             print(f"Problem: {problem.__doc__}")
 
             # Create model and get initial population
-            model = MinimalSR(
+            model = BasicSR(
                 population_size=50,
                 num_generations=30,
                 max_depth=3,

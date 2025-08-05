@@ -1,314 +1,428 @@
 [
   {
     "problem": "pythagorean_3d",
-    "time_limit": 15,
-    "actual_time": 15.000101566314697,
-    "generations": 25302,
-    "final_mse": 8.440811685864827e-31,
-    "final_expression": "(x1 * ((x1 + ((x2 * x2) / x1)) + ((x0 * x0) / x1)))",
-    "final_size": 15,
+    "time_limit": 60,
+    "actual_time": 0.313399076461792,
+    "generations": 0,
+    "final_mse": 7.454735554338561e-31,
+    "final_expression": "((x0 * x0) + ((x1 * x1) + (x2 * x2)))",
+    "final_size": 11,
     "improvements": [
       {
         "generation": 0,
-        "time": 0.000553131103515625,
-        "mse": 75.59012223312237,
-        "size": 1
+        "time": 0.3134162425994873,
+        "mse": 43.292614,
+        "size": 3
       },
       {
         "generation": 1,
-        "time": 0.0012302398681640625,
-        "mse": 19.962766860281935,
+        "time": 0.31342005729675293,
+        "mse": 24.590479,
         "size": 5
       },
       {
-        "generation": 555,
-        "time": 0.2347705364227295,
-        "mse": 16.60880004949279,
+        "generation": 4,
+        "time": 0.31342315673828125,
+        "mse": 17.780459,
+        "size": 7
+      },
+      {
+        "generation": 6,
+        "time": 0.31342530250549316,
+        "mse": 8.955865,
         "size": 9
       },
       {
-        "generation": 579,
-        "time": 0.24811220169067383,
-        "mse": 13.888344654502237,
+        "generation": 15,
+        "time": 0.3134281635284424,
+        "mse": 8.131271,
         "size": 11
       },
       {
-        "generation": 582,
-        "time": 0.2500591278076172,
-        "mse": 11.186209982107854,
+        "generation": 17,
+        "time": 0.3134300708770752,
+        "mse": 7.543568,
+        "size": 11
+      },
+      {
+        "generation": 19,
+        "time": 0.3134331703186035,
+        "mse": 7.232738,
+        "size": 13
+      },
+      {
+        "generation": 20,
+        "time": 0.31343507766723633,
+        "mse": 6.89074,
+        "size": 13
+      },
+      {
+        "generation": 168,
+        "time": 0.31343817710876465,
+        "mse": 4.0,
         "size": 15
       },
       {
-        "generation": 732,
-        "time": 0.3541584014892578,
-        "mse": 8.131271411641373,
+        "generation": 170,
+        "time": 0.31344032287597656,
+        "mse": 3.206148,
         "size": 17
       },
       {
-        "generation": 739,
-        "time": 0.35894060134887695,
-        "mse": 7.543568410684381,
-        "size": 17
-      },
-      {
-        "generation": 2176,
-        "time": 1.3223464488983154,
-        "mse": 0.9999999999999997,
-        "size": 19
-      },
-      {
-        "generation": 2262,
-        "time": 1.381080150604248,
-        "mse": 0.9592604913503275,
-        "size": 19
-      },
-      {
-        "generation": 2331,
-        "time": 1.4288790225982666,
-        "mse": 8.440811685864827e-31,
+        "generation": 172,
+        "time": 0.3134431838989258,
+        "mse": 3.206148,
         "size": 15
+      },
+      {
+        "generation": 173,
+        "time": 0.3134450912475586,
+        "mse": 1.0,
+        "size": 17
+      },
+      {
+        "generation": 177,
+        "time": 0.3134472370147705,
+        "mse": 1.0,
+        "size": 15
+      },
+      {
+        "generation": 188,
+        "time": 0.31345033645629883,
+        "mse": 0.0,
+        "size": 11
       }
     ]
   },
   {
     "problem": "quadratic_formula_discriminant",
-    "time_limit": 15,
-    "actual_time": 15.000179290771484,
-    "generations": 25254,
-    "final_mse": 3.5107391770246047e-31,
-    "final_expression": "((x0 + x0) * (((((x1 / 2.0) * x1) / x0) - x2) - x2))",
+    "time_limit": 60,
+    "actual_time": 1.3138806819915771,
+    "generations": 0,
+    "final_mse": 3.2124511472379094e-31,
+    "final_expression": "(x0 * ((((((x1 / x0) * x1) - x2) - x2) - x2) - x2))",
     "final_size": 15,
     "improvements": [
       {
         "generation": 0,
-        "time": 0.0002865791320800781,
-        "mse": 19.28328854661984,
+        "time": 1.3138988018035889,
+        "mse": 19.283289,
         "size": 1
       },
       {
-        "generation": 106,
-        "time": 0.03255581855773926,
-        "mse": 18.562433431757437,
-        "size": 7
-      },
-      {
-        "generation": 110,
-        "time": 0.03438258171081543,
-        "mse": 18.562433431757437,
+        "generation": 2,
+        "time": 1.31390380859375,
+        "mse": 18.562433,
         "size": 5
       },
       {
-        "generation": 135,
-        "time": 0.04507112503051758,
-        "mse": 16.490608646809616,
+        "generation": 8,
+        "time": 1.3139057159423828,
+        "mse": 18.562433,
+        "size": 3
+      },
+      {
+        "generation": 35,
+        "time": 1.3139088153839111,
+        "mse": 13.11733,
         "size": 7
       },
       {
-        "generation": 136,
-        "time": 0.04548144340515137,
-        "mse": 8.526740750705041,
-        "size": 7
-      },
-      {
-        "generation": 138,
-        "time": 0.04635882377624512,
-        "mse": 5.972180935336434,
-        "size": 7
-      },
-      {
-        "generation": 213,
-        "time": 0.07581424713134766,
-        "mse": 5.682593373951326,
-        "size": 13
-      },
-      {
-        "generation": 238,
-        "time": 0.08701944351196289,
-        "mse": 5.682593373951326,
+        "generation": 36,
+        "time": 1.313910961151123,
+        "mse": 11.220714,
         "size": 9
       },
       {
-        "generation": 239,
-        "time": 0.08753442764282227,
-        "mse": 4.757501248803619,
-        "size": 17
-      },
-      {
-        "generation": 245,
-        "time": 0.09127330780029297,
-        "mse": 2.55560307539669,
+        "generation": 39,
+        "time": 1.3139138221740723,
+        "mse": 8.526741,
         "size": 15
       },
       {
-        "generation": 263,
-        "time": 0.10177469253540039,
-        "mse": 2.55560307539669,
+        "generation": 40,
+        "time": 1.3139169216156006,
+        "mse": 6.967354,
         "size": 11
       },
       {
-        "generation": 553,
-        "time": 0.2539081573486328,
-        "mse": 1.427279827318357,
-        "size": 13
+        "generation": 42,
+        "time": 1.3139188289642334,
+        "mse": 6.967354,
+        "size": 9
       },
       {
-        "generation": 569,
-        "time": 0.2630329132080078,
-        "mse": 1.427279827318357,
-        "size": 11
-      },
-      {
-        "generation": 821,
-        "time": 0.3942422866821289,
-        "mse": 3.5107391770246047e-31,
+        "generation": 43,
+        "time": 1.3139209747314453,
+        "mse": 5.789967,
         "size": 17
       },
       {
-        "generation": 825,
-        "time": 0.3967306613922119,
-        "mse": 3.5107391770246047e-31,
+        "generation": 44,
+        "time": 1.3139238357543945,
+        "mse": 3.446778,
+        "size": 11
+      },
+      {
+        "generation": 49,
+        "time": 1.3139257431030273,
+        "mse": 3.446778,
+        "size": 9
+      },
+      {
+        "generation": 53,
+        "time": 1.3139288425445557,
+        "mse": 2.555603,
+        "size": 13
+      },
+      {
+        "generation": 87,
+        "time": 1.3139309883117676,
+        "mse": 2.555603,
+        "size": 11
+      },
+      {
+        "generation": 205,
+        "time": 1.3139336109161377,
+        "mse": 1.837984,
+        "size": 13
+      },
+      {
+        "generation": 223,
+        "time": 1.3139357566833496,
+        "mse": 1.42728,
+        "size": 13
+      },
+      {
+        "generation": 477,
+        "time": 1.313938856124878,
+        "mse": 1.358556,
+        "size": 15
+      },
+      {
+        "generation": 569,
+        "time": 1.3139407634735107,
+        "mse": 1.358556,
+        "size": 15
+      },
+      {
+        "generation": 664,
+        "time": 1.3139429092407227,
+        "mse": 0.328675,
+        "size": 17
+      },
+      {
+        "generation": 668,
+        "time": 1.3139457702636719,
+        "mse": 0.0,
         "size": 15
       }
     ]
   },
   {
-    "problem": "compound_fraction",
-    "time_limit": 15,
-    "actual_time": 15.000207662582397,
-    "generations": 49799,
-    "final_mse": 0.03110079918828909,
-    "final_expression": "1.0",
-    "final_size": 1,
+    "problem": "mixed_polynomial",
+    "time_limit": 60,
+    "actual_time": 0.17464780807495117,
+    "generations": 0,
+    "final_mse": 1.705911707540438e-31,
+    "final_expression": "((x1 * (x1 - x0)) + ((1.0 * x0) * x0))",
+    "final_size": 11,
     "improvements": [
       {
         "generation": 0,
-        "time": 0.0002570152282714844,
-        "mse": 0.03110079918828909,
-        "size": 1
+        "time": 0.1746675968170166,
+        "mse": 6.717108,
+        "size": 3
+      },
+      {
+        "generation": 1,
+        "time": 0.17467284202575684,
+        "mse": 4.840136,
+        "size": 5
+      },
+      {
+        "generation": 3,
+        "time": 0.17467474937438965,
+        "mse": 4.116316,
+        "size": 9
+      },
+      {
+        "generation": 4,
+        "time": 0.17467761039733887,
+        "mse": 1.770689,
+        "size": 9
+      },
+      {
+        "generation": 9,
+        "time": 0.17467975616455078,
+        "mse": 1.770689,
+        "size": 7
+      },
+      {
+        "generation": 10,
+        "time": 0.1746828556060791,
+        "mse": 1.729419,
+        "size": 7
+      },
+      {
+        "generation": 83,
+        "time": 0.17468476295471191,
+        "mse": 1.500598,
+        "size": 15
+      },
+      {
+        "generation": 87,
+        "time": 0.17468762397766113,
+        "mse": 1.415268,
+        "size": 17
+      },
+      {
+        "generation": 91,
+        "time": 0.17468976974487305,
+        "mse": 1.349702,
+        "size": 17
+      },
+      {
+        "generation": 92,
+        "time": 0.17469286918640137,
+        "mse": 1.349702,
+        "size": 15
+      },
+      {
+        "generation": 107,
+        "time": 0.17469477653503418,
+        "mse": 0.89697,
+        "size": 19
+      },
+      {
+        "generation": 109,
+        "time": 0.1746978759765625,
+        "mse": 0.0,
+        "size": 11
       }
     ]
   },
   {
     "problem": "polynomial_product",
-    "time_limit": 15,
-    "actual_time": 15.0002281665802,
-    "generations": 33544,
-    "final_mse": 0.0,
-    "final_expression": "((x0 + 1.0) * (2.0 + x1))",
-    "final_size": 7,
+    "time_limit": 60,
+    "actual_time": 0.03898286819458008,
+    "generations": 0,
+    "final_mse": 1.4920179279167917e-31,
+    "final_expression": "(x0 + (((x0 + x1) + 2.0) + (((x0 + x1) - x0) * x0)))",
+    "final_size": 15,
     "improvements": [
       {
         "generation": 0,
-        "time": 0.00022149085998535156,
-        "mse": 4.7290674002159445,
+        "time": 0.038995981216430664,
+        "mse": 4.729067,
         "size": 3
       },
       {
-        "generation": 2,
-        "time": 0.0009903907775878906,
-        "mse": 2.3514702131454372,
+        "generation": 1,
+        "time": 0.0390009880065918,
+        "mse": 2.35147,
         "size": 5
       },
       {
-        "generation": 19,
-        "time": 0.007259368896484375,
-        "mse": 2.315198300945899,
+        "generation": 13,
+        "time": 0.039003849029541016,
+        "mse": 2.315198,
         "size": 7
       },
       {
-        "generation": 52,
-        "time": 0.020758390426635742,
-        "mse": 1.273319232257756,
-        "size": 13
-      },
-      {
-        "generation": 54,
-        "time": 0.021841049194335938,
-        "mse": 0.5787995752364749,
+        "generation": 15,
+        "time": 0.039006948471069336,
+        "mse": 1.352767,
         "size": 15
       },
       {
-        "generation": 59,
-        "time": 0.024746179580688477,
-        "mse": 1.5376239489998814e-31,
+        "generation": 19,
+        "time": 0.039010047912597656,
+        "mse": 1.352767,
         "size": 13
       },
       {
-        "generation": 69,
-        "time": 0.02994680404663086,
-        "mse": 1.5376239489998814e-31,
-        "size": 11
-      },
-      {
-        "generation": 17245,
-        "time": 7.98913049697876,
-        "mse": 1.014695450499859e-31,
-        "size": 9
-      },
-      {
-        "generation": 25977,
-        "time": 11.858874559402466,
+        "generation": 21,
+        "time": 0.039012908935546875,
         "mse": 0.0,
-        "size": 7
+        "size": 15
       }
     ]
   },
   {
     "problem": "surface_area_sphere_approx",
-    "time_limit": 15,
-    "actual_time": 15.000292301177979,
-    "generations": 34051,
-    "final_mse": 0.0,
-    "final_expression": "((x0 + x0) * ((x0 + x0) * 2.0))",
-    "final_size": 9,
+    "time_limit": 60,
+    "actual_time": 21.895738124847412,
+    "generations": 0,
+    "final_mse": 0.4645249042375609,
+    "final_expression": "(((x0 * ((2.0 + 2.0) + x0)) * x0) + (((x0 - 1.0) + (2.0 * x0)) + x0))",
+    "final_size": 19,
     "improvements": [
       {
         "generation": 0,
-        "time": 0.00022721290588378906,
-        "mse": 783.2119449554256,
-        "size": 3
+        "time": 21.895750045776367,
+        "mse": 140.51479,
+        "size": 19
       },
       {
         "generation": 1,
-        "time": 0.000591278076171875,
-        "mse": 775.6042103244882,
-        "size": 5
-      },
-      {
-        "generation": 2,
-        "time": 0.0009872913360595703,
-        "mse": 497.0145691704831,
-        "size": 7
+        "time": 21.895753860473633,
+        "mse": 113.619285,
+        "size": 9
       },
       {
         "generation": 3,
-        "time": 0.0014171600341796875,
-        "mse": 202.1309129458902,
-        "size": 9
+        "time": 21.89575695991516,
+        "mse": 76.461634,
+        "size": 15
       },
       {
-        "generation": 6,
-        "time": 0.0027108192443847656,
-        "mse": 28.15734234501083,
-        "size": 11
+        "generation": 5,
+        "time": 21.895759105682373,
+        "mse": 7.860478,
+        "size": 17
       },
       {
         "generation": 8,
-        "time": 0.003679513931274414,
-        "mse": 1.0204326068909955,
-        "size": 11
+        "time": 21.895761013031006,
+        "mse": 2.553228,
+        "size": 19
       },
       {
         "generation": 10,
-        "time": 0.004524707794189453,
-        "mse": 0.0,
-        "size": 11
+        "time": 21.895763874053955,
+        "mse": 1.610391,
+        "size": 19
       },
       {
-        "generation": 1030,
-        "time": 0.47156572341918945,
-        "mse": 0.0,
-        "size": 9
+        "generation": 11,
+        "time": 21.895766019821167,
+        "mse": 1.571398,
+        "size": 19
+      },
+      {
+        "generation": 18,
+        "time": 21.895769119262695,
+        "mse": 1.020433,
+        "size": 17
+      },
+      {
+        "generation": 19,
+        "time": 21.895771026611328,
+        "mse": 0.897687,
+        "size": 17
+      },
+      {
+        "generation": 44,
+        "time": 21.89577317237854,
+        "mse": 0.897687,
+        "size": 17
+      },
+      {
+        "generation": 673,
+        "time": 21.895774841308594,
+        "mse": 0.464525,
+        "size": 19
       }
     ]
   }

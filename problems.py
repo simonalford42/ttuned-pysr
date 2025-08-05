@@ -195,7 +195,7 @@ SIMPLE_PROBLEMS = [
 HARDER_PROBLEMS = [
     pythagorean_3d,
     quadratic_formula_discriminant,
-    compound_fraction,
+    mixed_polynomial,
     polynomial_product,
     surface_area_sphere_approx
 ]

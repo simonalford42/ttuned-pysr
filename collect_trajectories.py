@@ -1,5 +1,5 @@
 """
-Trajectory collection functions using the refactored MinimalSR with collect_trajectory flag
+Trajectory collection functions using BasicSR with proper trajectory collection
 """
 
 import numpy as np
@@ -7,12 +7,12 @@ import json
 import os
 import time
 from datetime import datetime
-from minimal_sr import MinimalSR
-from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
+from basic_sr import BasicSR
+from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, HARDER_PROBLEMS
 
 
-def collect_trajectories_for_problems(problem_list, problem_set_name, num_runs=3):
-    """Collect trajectories for a set of problems using MinimalSR with collect_trajectory=True"""
+def collect_trajectories_for_problems(problem_list, problem_set_name, num_runs=3, time_limit=15):
+    """Collect trajectories for a set of problems using BasicSR with collect_trajectory=True"""
     print(f"=== Collecting trajectories for {problem_set_name} ===")
 
     all_trajectories = {}
@@ -20,222 +20,201 @@ def collect_trajectories_for_problems(problem_list, problem_set_name, num_runs=3
     for i, problem in enumerate(problem_list):
         problem_name = problem.__name__
         print(f"\nCollecting trajectories for problem {i+1}: {problem_name}")
+        print(f"Ground truth: {problem.__doc__}")
 
         problem_trajectories = []
 
         for run in range(num_runs):
-            print(f"  Run {run+1}/{num_runs}")
+            print(f"  Run {run+1}/{num_runs} - {time_limit}s time limit")
 
             # Generate data
             X, y = problem(seed=42 + run)  # Different seed for each run
 
-            # Create MinimalSR with trajectory collection enabled
-            model = MinimalSR(
-                population_size=10,  # Small population size as requested
+            # Create BasicSR with trajectory collection enabled
+            model = BasicSR(
+                population_size=20,  # Match the test_single_trajectory format
                 num_generations=10000,  # High number, will be stopped by time limit
-                max_depth=5,
-                max_size=20,
-                collect_trajectory=True  # Enable trajectory collection
+                max_depth=4,
+                max_size=15,
+                tournament_size=3,
+                collect_trajectory=True,  # Enable trajectory collection
+                time_limit=time_limit  # Use built-in time limit
             )
 
-            # Fit with 15 second time limit using manual evolution loop
-            print(f"    Running for 15 seconds...")
-
-            # Initialize evolution manually for time control
-            num_vars = X.shape[1]
-            population = model.create_initial_population(num_vars)
-
+            # Fit the model - this will automatically collect trajectory data
             start_time = time.time()
-            generation = 0
+            model.fit(X, y)
+            actual_time = time.time() - start_time
 
-            while time.time() - start_time < 15:  # 15 second time limit
-                # Evaluate fitness
-                fitnesses = [model.fitness(ind, X, y) for ind in population]
+            # Get final results
+            if model.best_model_:
+                y_pred = model.predict(X)
+                final_mse = np.mean((y - y_pred)**2)
+            else:
+                final_mse = float('inf')
 
-                # Record generation data for trajectory
-                if model.collect_trajectory:
-                    best_idx = np.argmax(fitnesses)
-                    best_individual = population[best_idx]
-                    best_fitness = fitnesses[best_idx]
-
-                    generation_data = {
-                        'generation': generation,
-                        'time': time.time() - start_time,
-                        'best_fitness': float(best_fitness),
-                        'best_expression': str(best_individual),
-                        'best_size': best_individual.size(),
-                        'population_diversity': len(set(str(ind) for ind in population))
-                    }
-                    model.trajectory.append(generation_data)
-
-                # Evolution step
-                new_population = []
-
-                # Elitism - keep best individual
-                best_idx = np.argmax(fitnesses)
-                new_population.append(population[best_idx].copy())
-
-                # Generate rest of population
-                while len(new_population) < model.population_size:
-                    if np.random.random() < 0.7:  # Crossover
-                        parent1 = model.tournament_selection(population, fitnesses)
-                        parent2 = model.tournament_selection(population, fitnesses)
-                        child = model.crossover(parent1, parent2)
-                    else:  # Mutation
-                        parent = model.tournament_selection(population, fitnesses)
-                        child = model.mutate(parent, num_vars)
-                    new_population.append(child)
-
-                population = new_population
-                generation += 1
-
-            # Set best model
-            final_fitnesses = [model.fitness(ind, X, y) for ind in population]
-            best_idx = np.argmax(final_fitnesses)
-            model.best_model_ = population[best_idx]
-
-            # Add problem metadata to trajectory
-            trajectory_with_metadata = {
-                'problem_name': problem_name,
-                'problem_doc': problem.__doc__,
-                'run_id': run,
-                'data_shape': {'X': X.shape, 'y_range': [float(y.min()), float(y.max())]},
-                'final_mse': float(np.mean((y - model.predict(X))**2)),
-                'trajectory_data': model.trajectory
+            # Create trajectory data with proper metadata format
+            trajectory_data = {
+                'metadata': {
+                    'timestamp': datetime.now().isoformat(),
+                    'problem_name': problem_name,
+                    'problem_description': problem.__doc__,
+                    'run_number': run + 1,
+                    'population_size': model.population_size,
+                    'num_generations': model.num_generations,
+                    'max_depth': model.max_depth,
+                    'max_size': model.max_size,
+                    'tournament_size': model.tournament_size,
+                    'time_limit': time_limit,
+                    'actual_time': actual_time,
+                    'total_generations_recorded': len(model.trajectory),
+                    'final_mse': final_mse,
+                    'final_expression': str(model.best_model_) if model.best_model_ else None
+                },
+                'trajectory': model.trajectory  # This contains the full population data
             }
 
-            problem_trajectories.append(trajectory_with_metadata)
+            problem_trajectories.append(trajectory_data)
+            print(f"    Completed in {actual_time:.1f}s, {len(model.trajectory)} generations recorded")
 
         all_trajectories[problem_name] = problem_trajectories
 
-    # Save all trajectories
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"trajectories_{problem_set_name}_{timestamp}.json"
+    return all_trajectories
 
+
+def save_trajectories(trajectories, filename_prefix):
+    """Save trajectories to JSON files"""
     os.makedirs('data', exist_ok=True)
-    filepath = os.path.join('data', filename)
-
-    summary_data = {
-        'metadata': {
-            'timestamp': datetime.now().isoformat(),
-            'problem_set_name': problem_set_name,
-            'num_problems': len(problem_list),
-            'num_runs_per_problem': num_runs,
-            'total_trajectories': sum(len(trajectories) for trajectories in all_trajectories.values())
-        },
-        'trajectories': all_trajectories
-    }
-
-    with open(filepath, 'w') as f:
-        json.dump(summary_data, f, indent=2)
-
-    print(f"\nAll trajectories saved to {filepath}")
-    print(f"Total trajectories collected: {summary_data['metadata']['total_trajectories']}")
-
-    return filepath, all_trajectories
+    
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    
+    # Save all trajectories in one file
+    all_filename = f"data/{filename_prefix}_all_{timestamp}.json"
+    with open(all_filename, 'w') as f:
+        json.dump(trajectories, f, indent=2)
+    print(f"All trajectories saved to {all_filename}")
+    
+    # Also save individual problem trajectories for easier analysis
+    for problem_name, problem_trajectories in trajectories.items():
+        problem_filename = f"data/{filename_prefix}_{problem_name}_{timestamp}.json"
+        with open(problem_filename, 'w') as f:
+            json.dump(problem_trajectories, f, indent=2)
+        print(f"{problem_name} trajectories saved to {problem_filename}")
+    
+    return all_filename
 
 
-def test_single_trajectory_collection():
+def test_single_trajectory():
     """Test trajectory collection on a single problem"""
-    print("Testing single trajectory collection...")
-
-    # Pick one ultra-simple problem
-    from problems import single_variable
-
-    X, y = single_variable(seed=42)
-    print(f"Problem: {single_variable.__doc__}")
+    print("Testing trajectory collection on single problem...")
+    
+    from problems import simple_square
+    
+    # Generate data
+    X, y = simple_square(seed=42)
+    print(f"Problem: {simple_square.__doc__}")
     print(f"Data shape: X={X.shape}, y range=[{y.min():.3f}, {y.max():.3f}]")
-
+    
     # Create model with trajectory collection
-    model = MinimalSR(
+    model = BasicSR(
         population_size=20,
-        num_generations=10,
+        num_generations=10,  # Small number for testing
         max_depth=2,
         max_size=8,
+        tournament_size=3,
         collect_trajectory=True
     )
-
-    # Fit and collect
+    
+    # Fit and collect trajectory
     model.fit(X, y)
+    
+    # Create trajectory data
+    trajectory_data = {
+        'metadata': {
+            'timestamp': datetime.now().isoformat(),
+            'population_size': model.population_size,
+            'num_generations': model.num_generations,
+            'max_depth': model.max_depth,
+            'max_size': model.max_size,
+            'tournament_size': model.tournament_size,
+            'total_generations_recorded': len(model.trajectory)
+        },
+        'trajectory': model.trajectory
+    }
+    
+    # Save test trajectory
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    filename = f"data/test_single_trajectory_{timestamp}.json"
+    os.makedirs('data', exist_ok=True)
+    with open(filename, 'w') as f:
+        json.dump(trajectory_data, f, indent=2)
+    
+    print(f"Test trajectory saved to {filename}")
+    print(f"Trajectory contains {len(model.trajectory)} generations")
+    
+    return filename
 
-    # Check trajectory
-    print(f"\nTrajectory collected:")
-    print(f"- Generations recorded: {len(model.trajectory)}")
-    print(f"- Final MSE: {np.mean((y - model.predict(X))**2):.6f}")
-    print(f"- Best expression: {model.best_model_}")
 
-    # Save trajectory
-    filename = f"test_single_trajectory_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
-    filepath = model.save_trajectory(filename)
-
-    print(f"✅ Single trajectory test completed successfully!")
-    return filepath
-
-
-def test_trajectory_collection_disabled():
-    """Test that MinimalSR works normally when collect_trajectory=False"""
-    print("Testing MinimalSR with trajectory collection disabled...")
-
+def test_trajectory_disabled():
+    """Test that BasicSR works normally when collect_trajectory=False"""
+    print("Testing BasicSR with trajectory collection disabled...")
+    
     from problems import simple_square
-
     X, y = simple_square(seed=42)
-
-    # Create model WITHOUT trajectory collection (default)
-    model = MinimalSR(
-        population_size=15,
+    
+    model = BasicSR(
+        population_size=10,
         num_generations=5,
-        max_depth=2,
-        max_size=5
+        collect_trajectory=False  # Disabled
     )
-
-    # Fit normally
+    
     model.fit(X, y)
-
-    # Check that trajectory is empty
-    print(f"Trajectory length: {len(model.trajectory)} (should be 0)")
-    print(f"Final MSE: {np.mean((y - model.predict(X))**2):.6f}")
-    print(f"Best expression: {model.best_model_}")
-
-    # Try to save trajectory (should raise error)
-    try:
-        model.save_trajectory("should_fail.json")
-        print("❌ ERROR: save_trajectory should have failed!")
-    except ValueError as e:
-        print(f"✅ Correctly caught error: {e}")
-
-    print("✅ Disabled trajectory test completed successfully!")
-
-
-def collect_all_simple_trajectories(num_runs=3):
-    """Collect trajectories for all 15 problems from all_simple_splits.txt"""
-    print("Collecting trajectories for ALL_SIMPLE_PROBLEMS (15 problems total)")
-    print("Using 15 second time limit and population size 10")
-    print(f"Total estimated time: {15 * 15 * num_runs} seconds = {15 * 15 * num_runs / 60:.1f} minutes")
-
-    # Collect for all 15 problems
-    filepath, data = collect_trajectories_for_problems(
-        ALL_SIMPLE_PROBLEMS,  # All 15 problems
-        "all_simple_15s_n10",
-        num_runs=num_runs
-    )
-
-    return filepath, data
-
-
-def main():
-    """Collect trajectories for all simple problems for training data"""
-    print("Collecting trajectories for training data generation...")
-    print("=" * 60)
-
-    # Collect trajectories for all 15 problems
-    filepath, data = collect_all_simple_trajectories(num_runs=1)
-
-    print(f"\n✅ Trajectory collection completed!")
-    print(f"Data saved to: {filepath}")
-    print(f"Ready for conversion to training format.")
-
-    return filepath, data
+    
+    y_pred = model.predict(X)
+    mse = np.mean((y - y_pred)**2)
+    
+    print(f"Final MSE: {mse:.6f}")
+    print(f"Final expression: {model.best_model_}")
+    print(f"Trajectory length: {len(model.trajectory) if model.trajectory else 0}")
+    
+    assert len(model.trajectory) == 0, "Trajectory should be empty when disabled"
+    print("✓ Trajectory collection properly disabled")
 
 
 if __name__ == "__main__":
-    main()
+    print("Trajectory Collection for Harder Problems")
+    print("="*50)
+    print(f"Collecting trajectories for {len(HARDER_PROBLEMS)} harder problems")
+    print("Parameters: 60 seconds per problem, 2 runs per problem")
+    print(f"Estimated total time: ~{len(HARDER_PROBLEMS) * 60 * 2 / 60:.0f} minutes")
+    print()
+    
+    # Collect trajectories for all harder problems
+    trajectories = collect_trajectories_for_problems(
+        HARDER_PROBLEMS,
+        "harder_problems",
+        num_runs=2,
+        time_limit=60
+    )
+    
+    # Save the collected trajectories
+    filename = save_trajectories(trajectories, "harder_problems")
+    
+    print("\n" + "="*50)
+    print("COLLECTION SUMMARY:")
+    total_trajectories = 0
+    total_generations = 0
+    
+    for problem_name, runs in trajectories.items():
+        print(f"\n{problem_name}:")
+        for run_idx, run_data in enumerate(runs):
+            num_gens = len(run_data['trajectory'])
+            final_mse = run_data['metadata']['final_mse']
+            actual_time = run_data['metadata']['actual_time']
+            total_trajectories += 1
+            total_generations += num_gens
+            print(f"  Run {run_idx+1}: {num_gens:4d} generations, {actual_time:5.1f}s, MSE={final_mse:.2e}")
+    
+    print(f"\nTOTAL: {total_trajectories} trajectory runs, {total_generations} total generations recorded")
+    print(f"Average: {total_generations/total_trajectories:.0f} generations per run")
+    print(f"\n✓ All trajectories saved to {filename}")
