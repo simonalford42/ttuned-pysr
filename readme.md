@@ -235,13 +235,84 @@ Integration stream of search new plan:
 1. Copy over files, hook up our data. Make sure we can run training a really small model on our data, and view the results in wandb.
 2. Change the training so that instead of full sequence completion, we sample len(population) from the first.
 
-I think I need to make the population size smaller. Only consider
+Need to add context to the LLM so that it knows what the constants, variables, and operators are when it is generating new expressions.
+Here's how we'll do this, Format 1.0:
+
+We'll add to convert_trajectories so there's ability to customize how the data is presented to the model. The easiest way
+
+Question: what exactly is the model training on for stream of search? how does it differ for us? one advantage is that we don't need any context whatsoever beyond the current step.  For us, instead of having sequences, we really just have a big dataset of "predict one step" things:
+
+given context, and current generation, predict the next generation.
+context is O(1) (does not increase as we search for longer). To start, the context can just be ops, variables, and constants available. Later, we can experiment with including other things in the context: current iteration number, total iterations, amount of recent progress. We could even provide additional info for each expression, such as info on max/min value over range of input points, number of zeroes (like a text representation of what plotting would look like).
+
+Hmm, given that we train models this way, maybe we can structure the training differently. First let's change convert_trajectories so that we save a dataset of one step predictions, and we can customize the context provided (for now, set up the context as specified)
 
 
-Current situation:
-- I think the trajectory collection was messed up. The saved jsons look awful. The correct format of the trajectory should be a json with fields
+- generalize to new problems
+- give hints about problem in context: picture? mean/std, E[x_i * y], E[y^n]
+  {
+   "input": "x0,x1,x2 | +,-,*,/ | 1.0,2.0\n x0 <FITNESS>-119.33 x1(-108.50) x2(-112.03) 1.0(-91.63)
+  2.0(-75.60) (x0+1.0)(-100.40) (x0*1.0)(-119.35) (x0+2.0)(-83.44) (x0*2.0)(-133.97) (x1+1.0)(-90.48)
+  (x1*1.0)(-108.52) (x1+2.0)(-74.45) (x1*2.0)(-115.04) (x2+1.0)(-93.99) (x2*1.0)(-112.05) (x2+2.0)(-77.92)
+  (x2*2.0)(-120.84) (x0*x0)(-63.39) (x1*x1)(-43.32) (x2*x2)(-54.51)\nNext:",
+    "targets": [
+      "(x1 * x1)",
+      "((x2 / x1) - (1.0 + x0))",
+      "(x0 + (x1 + 2.0))",
+      "x2",
+      "(2.0 * x0)",
+      "((x0 + 2.0) * (x1 - x2))",
+      "(x1 * x2)",
+      "((2.0 / x1) * x0)",
+      "(x0 + 1.0)",
+      "(x2 * x1)",
+      "1.0",
+      "x2",
+      "(x1 * x0)",
+      "((1.0 * (1.0 / 2.0)) + 2.0)",
+      "(x1 + 2.0)",
+      "(x2 + 1.0)",
+      "x0",
+      "(x1 + x2)",
+      "2.0",
+      "(x1 * x1)"
+    ],
+    "metadata": {
+      "problem": "pythagorean_3d",
 
-Refactor MinimalSR so that:
-(1) it is called BasicSR, not MinimalSR
-(2) it has a time limit argument, so you can run for 15 seconds
-(3) it stops running if mse reaches zero (or 1e-31 or similar "floating point error small" number)
+      "generation": 0,
+      "run_id": 1
+    }
+  }
+
+
+Note a few things:
+- right now i'm storing the data so that all the possible targets are saved in one point. Ultimately, we'd like to train the LLM with a "input/target" supervised learning, so we'll need to make another converter that duplicates len(target) points for each point in this version. Make this too, taking into account the best way to set up the training to do this type of training.
+
+Note that the current training framework for stream of search probably does sequence prediction, but we'll probably have to change it to set up this slightly different style of training. Is that right?
+
+1. make the convert trajectories
+2. explore the current training framework, and how it differs from what we want, with me
+3. make the dataset conversion to "training ready dataset" from the earlier conver_trajectories
+4. change the training framework
+
+
+Okay training framework is set up. Current pipeline is convert_trajectories -> train_one_step.py. Here are some changes to make for them/questions I have looking at the script:
+- I didn't realize we will use special tokens for the setup to make the formatted input. Change convert_trajectories so it still makes a copy for each example, but just does json fields of 'context', 'population', and 'target'. should simplify the code in train_one_step tokenize function.
+- Why aren't input_tokens variable used in tokenize?
+- What is the attention mask?
+
+
+# 8/11
+Training a transformer model with the one-step training framework yields a model which can do the following:
+- Given context and current population, predict a new expression
+
+We can use this to generate a new population of size N by sampling N new expressions in parallel from the current population.
+Then we can use this as the SR algorithm, and compare performance to the BasicSR algorithm.
+Write code which loads a trained model (trained with train_one_step.py) and runs "neural SR" with it in this manner. In particular, you should
+1. Refactor BasicSR so that the "given current population, propose new population" is abstracted into a function, for which there are two implementations: the BasicSR step, and the neural variant.
+2. Make a way to run BasicSR with the neural injection. Compare neural/basic SR on the harder problems test bench, in terms of # of iterations to find a solution. also measure "wall clock" time for the two.
+
+
+# 8/12
+IN basic_sr.py, rewrite NeuralSR's generate_population so that it generates all members of the new population at the same time in parallel by sampling N outputs from the input string, and then processing them each.

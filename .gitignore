@@ -8,7 +8,6 @@ __pycache__/
 # Claude Code
 .claude/
 
-# Model files
 *.pt
 *.pth
 models/*.pt
@@ -46,3 +45,9 @@ ENV/
 
 # External repositories
 stream-of-search/
+
+data/
+out/
+training/checkpoints/
+wandb/
+

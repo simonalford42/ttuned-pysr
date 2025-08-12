@@ -19,6 +19,5 @@
   "window_size": 2048,
   "bos_token_id": 50256,
   "eos_token_id": 50256,
-  "torch_dtype": "bfloat16",
-  "_attn_implementation": "flash_attention_2"
+  "torch_dtype": "bfloat16"
 }

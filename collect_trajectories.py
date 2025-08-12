@@ -85,36 +85,36 @@ def collect_trajectories_for_problems(problem_list, problem_set_name, num_runs=3
 def save_trajectories(trajectories, filename_prefix):
     """Save trajectories to JSON files"""
     os.makedirs('data', exist_ok=True)
-    
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    
+
     # Save all trajectories in one file
     all_filename = f"data/{filename_prefix}_all_{timestamp}.json"
     with open(all_filename, 'w') as f:
         json.dump(trajectories, f, indent=2)
     print(f"All trajectories saved to {all_filename}")
-    
+
     # Also save individual problem trajectories for easier analysis
     for problem_name, problem_trajectories in trajectories.items():
         problem_filename = f"data/{filename_prefix}_{problem_name}_{timestamp}.json"
         with open(problem_filename, 'w') as f:
             json.dump(problem_trajectories, f, indent=2)
         print(f"{problem_name} trajectories saved to {problem_filename}")
-    
+
     return all_filename
 
 
 def test_single_trajectory():
     """Test trajectory collection on a single problem"""
     print("Testing trajectory collection on single problem...")
-    
+
     from problems import simple_square
-    
+
     # Generate data
     X, y = simple_square(seed=42)
     print(f"Problem: {simple_square.__doc__}")
     print(f"Data shape: X={X.shape}, y range=[{y.min():.3f}, {y.max():.3f}]")
-    
+
     # Create model with trajectory collection
     model = BasicSR(
         population_size=20,
@@ -124,10 +124,10 @@ def test_single_trajectory():
         tournament_size=3,
         collect_trajectory=True
     )
-    
+
     # Fit and collect trajectory
     model.fit(X, y)
-    
+
     # Create trajectory data
     trajectory_data = {
         'metadata': {
@@ -141,42 +141,42 @@ def test_single_trajectory():
         },
         'trajectory': model.trajectory
     }
-    
+
     # Save test trajectory
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     filename = f"data/test_single_trajectory_{timestamp}.json"
     os.makedirs('data', exist_ok=True)
     with open(filename, 'w') as f:
         json.dump(trajectory_data, f, indent=2)
-    
+
     print(f"Test trajectory saved to {filename}")
     print(f"Trajectory contains {len(model.trajectory)} generations")
-    
+
     return filename
 
 
 def test_trajectory_disabled():
     """Test that BasicSR works normally when collect_trajectory=False"""
     print("Testing BasicSR with trajectory collection disabled...")
-    
+
     from problems import simple_square
     X, y = simple_square(seed=42)
-    
+
     model = BasicSR(
         population_size=10,
         num_generations=5,
         collect_trajectory=False  # Disabled
     )
-    
+
     model.fit(X, y)
-    
+
     y_pred = model.predict(X)
     mse = np.mean((y - y_pred)**2)
-    
+
     print(f"Final MSE: {mse:.6f}")
     print(f"Final expression: {model.best_model_}")
     print(f"Trajectory length: {len(model.trajectory) if model.trajectory else 0}")
-    
+
     assert len(model.trajectory) == 0, "Trajectory should be empty when disabled"
     print("✓ Trajectory collection properly disabled")
 
@@ -188,7 +188,7 @@ if __name__ == "__main__":
     print("Parameters: 60 seconds per problem, 2 runs per problem")
     print(f"Estimated total time: ~{len(HARDER_PROBLEMS) * 60 * 2 / 60:.0f} minutes")
     print()
-    
+
     # Collect trajectories for all harder problems
     trajectories = collect_trajectories_for_problems(
         HARDER_PROBLEMS,
@@ -196,15 +196,15 @@ if __name__ == "__main__":
         num_runs=2,
         time_limit=60
     )
-    
+
     # Save the collected trajectories
     filename = save_trajectories(trajectories, "harder_problems")
-    
+
     print("\n" + "="*50)
     print("COLLECTION SUMMARY:")
     total_trajectories = 0
     total_generations = 0
-    
+
     for problem_name, runs in trajectories.items():
         print(f"\n{problem_name}:")
         for run_idx, run_data in enumerate(runs):
@@ -214,7 +214,7 @@ if __name__ == "__main__":
             total_trajectories += 1
             total_generations += num_gens
             print(f"  Run {run_idx+1}: {num_gens:4d} generations, {actual_time:5.1f}s, MSE={final_mse:.2e}")
-    
+
     print(f"\nTOTAL: {total_trajectories} trajectory runs, {total_generations} total generations recorded")
     print(f"Average: {total_generations/total_trajectories:.0f} generations per run")
     print(f"\n✓ All trajectories saved to {filename}")

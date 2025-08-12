@@ -5,6 +5,9 @@ import os
 import time
 from datetime import datetime
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
+import torch
+from transformers import AutoTokenizer, GPTNeoForCausalLM
+from training.format_utils import format_context, format_population_with_fitness, format_inference_input
 
 
 class Node:
@@ -225,6 +228,31 @@ class BasicSR:
 
         return child
 
+    def generate_child_via_evolution(self, population, fitnesses, num_vars, crossover_prob=0.7):
+        """Generate a single child using basic evolution operators (crossover or mutation)"""
+        if np.random.random() < crossover_prob:  # Crossover
+            parent1 = self.tournament_selection(population, fitnesses)
+            parent2 = self.tournament_selection(population, fitnesses)
+            child = self.crossover(parent1, parent2)
+        else:  # Mutation
+            parent = self.tournament_selection(population, fitnesses)
+            child = self.mutate(parent, num_vars)
+        return child
+
+    def generate_new_population(self, population, fitnesses, best_individual, num_vars):
+        """Generate new population using BasicSR evolution operators"""
+        new_population = []
+
+        # Elitism: keep best
+        new_population.append(best_individual.copy())
+
+        # Generate rest through evolution
+        while len(new_population) < self.population_size:
+            child = self.generate_child_via_evolution(population, fitnesses, num_vars)
+            new_population.append(child)
+
+        return new_population
+
     def record_population_state(self, population, fitnesses, generation):
         """Record the current population state (only if collect_trajectory=True)"""
         if not self.collect_trajectory:
@@ -295,25 +323,10 @@ class BasicSR:
                     print(f"MSE reached near-zero ({mse:.2e}). Stopping evolution.")
                     break
 
+            # print(f"Gen {generation}: MSE={mse:.6f}, Size={best_individual.size()}, Expr={best_individual}")
+
             # Create new population
-            new_population = []
-
-            # Elitism: keep best
-            new_population.append(best_individual.copy())
-
-            # Generate rest through evolution
-            while len(new_population) < self.population_size:
-                if np.random.random() < 0.7:  # Crossover
-                    parent1 = self.tournament_selection(population, fitnesses)
-                    parent2 = self.tournament_selection(population, fitnesses)
-                    child = self.crossover(parent1, parent2)
-                else:  # Mutation
-                    parent = self.tournament_selection(population, fitnesses)
-                    child = self.mutate(parent, num_vars)
-
-                new_population.append(child)
-
-            population = new_population
+            population = self.generate_new_population(population, fitnesses, best_individual, num_vars)
             if self.collect_trajectory:
                 self.generation_count += 1
 
@@ -402,6 +415,192 @@ def test_on_simple():
     """Test on regular simple problems"""
     return test_on_problems(SIMPLE_PROBLEMS, "Testing on Regular Simple Problems")
 
+
+class NeuralSR(BasicSR):
+    """Neural version of BasicSR that uses a trained transformer for population generation"""
+
+    def __init__(self, model_path, tokenizer_name="EleutherAI/gpt-neo-1.3B", **kwargs):
+        super().__init__(**kwargs)
+        self.model_path = model_path
+        self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+        # Load model and tokenizer
+        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+        self.model = GPTNeoForCausalLM.from_pretrained(model_path)
+        self.model.to(self.device)
+        self.model.eval()
+
+        # Add special tokens
+        special_tokens = {
+            "additional_special_tokens": [
+                "<CONTEXT>", "<POPULATION>", "<FITNESS>", "<TARGET>"
+            ]
+        }
+        self.tokenizer.add_special_tokens(special_tokens)
+
+        # Initialize expression parser
+        from expression_parser import ExpressionParser
+        self.expr_parser = ExpressionParser()
+
+        # Track neural suggestion statistics
+        self.neural_suggestions_total = 0
+        self.neural_suggestions_well_formed = 0
+
+    def format_context_and_population(self, population, fitnesses, num_vars):
+        """Format context and population for the neural model"""
+        # Format context using shared utility
+        variables = [f"x{i}" for i in range(num_vars)]
+        context = format_context(variables, self.operators, self.constants)
+
+        # Format population using shared utility
+        expressions = [str(expr) for expr in population]
+        population_str = format_population_with_fitness(expressions, fitnesses)
+
+        return context, population_str
+
+    def extract_first_expression(self, text):
+        """Extract the first complete expression from generated text"""
+        text = text.strip()
+        if not text:
+            return text
+
+        # Handle simple terminal case
+        if not text.startswith('('):
+            # For terminals like "x0" or "1.0", take until first space or <FITNESS>
+            parts = text.split()
+            if parts:
+                first_part = parts[0]
+                # Remove any trailing special tokens
+                for token in ["<FITNESS>", "<CONTEXT>", "<POPULATION>", "<TARGET>"]:
+                    if token in first_part:
+                        first_part = first_part.split(token)[0]
+                return first_part
+            return text
+
+        # For parenthesized expressions, need to find matching closing paren
+        paren_count = 0
+        for i, char in enumerate(text):
+            if char == '(':
+                paren_count += 1
+            elif char == ')':
+                paren_count -= 1
+                if paren_count == 0:
+                    # Found the complete expression
+                    return text[:i+1]
+
+        # If we didn't find matching parens, return the whole thing
+        return text
+
+    def parse_generated_expression(self, text):
+        """Parse a generated expression string into a Node tree"""
+        text = text.strip()
+        return self.expr_parser.parse(text)
+
+    def generate_new_population(self, population, fitnesses, best_individual, num_vars):
+        """Generate new population using neural model predictions with parallel sampling"""
+        new_population = []
+
+        # Elitism: keep best
+        new_population.append(best_individual.copy())
+
+        # Format input for neural model
+        context, population_str = self.format_context_and_population(population, fitnesses, num_vars)
+
+        # Calculate how many new members we need to generate
+        num_to_generate = self.population_size - 1  # -1 for elitism
+
+        # Create input prompt using shared formatting
+        input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
+
+        # Tokenize and generate all members in parallel
+        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=50,
+                num_return_sequences=num_to_generate,
+                temperature=0.8,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id
+            )
+
+        # Process all generated outputs in batch
+        for i in range(num_to_generate):
+            # Decode the generated expression
+            generated = self.tokenizer.decode(outputs[i], skip_special_tokens=False)
+
+            # Extract the target part
+            if "<TARGET>" in generated:
+                target_part = generated.split("<TARGET>")[1].split(self.tokenizer.eos_token)[0].strip()
+
+                # Extract just the first complete expression
+                first_expr = self.extract_first_expression(target_part)
+
+                # Track neural suggestion statistics
+                self.neural_suggestions_total += 1
+
+                try:
+                    new_expr = self.parse_generated_expression(first_expr)
+                    # Successfully parsed - this is well-formed (no size constraints for NeuralSR)
+                    self.neural_suggestions_well_formed += 1
+                    new_population.append(new_expr)
+                except:
+                    print('Not well formed, falling back to basic evolution')
+                    # Parsing failed - not well-formed
+                    # Fallback to basic evolution if parsing fails
+                    child = self.generate_child_via_evolution(population, fitnesses, num_vars)
+                    new_population.append(child)
+            else:
+                print('No proper target format, falling back to basic evolution')
+                # No proper target format - not well-formed
+                self.neural_suggestions_total += 1
+                # Fallback if model doesn't generate proper format
+                child = self.generate_child_via_evolution(population, fitnesses, num_vars)
+                new_population.append(child)
+
+        return new_population
+
+    def get_well_formed_percentage(self):
+        """Get the percentage of neural suggestions that were well-formed"""
+        if self.neural_suggestions_total == 0:
+            return 0.0
+        return (self.neural_suggestions_well_formed / self.neural_suggestions_total) * 100.0
+
+    def save_trajectory(self, filename):
+        """Save the collected trajectory to a JSON file with neural-specific metadata"""
+        if not self.collect_trajectory:
+            raise ValueError("Trajectory collection was not enabled. Set collect_trajectory=True when initializing.")
+
+        os.makedirs('data', exist_ok=True)
+
+        trajectory_data = {
+            'metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'model_type': 'NeuralSR',
+                'model_path': self.model_path,
+                'population_size': self.population_size,
+                'num_generations': self.num_generations,
+                'max_depth': self.max_depth,
+                'max_size': self.max_size,
+                'tournament_size': self.tournament_size,
+                'total_generations_recorded': len(self.trajectory),
+                'neural_suggestions_total': self.neural_suggestions_total,
+                'neural_suggestions_well_formed': self.neural_suggestions_well_formed,
+                'well_formed_percentage': self.get_well_formed_percentage()
+            },
+            'trajectory': self.trajectory
+        }
+
+        filepath = os.path.join('data', filename)
+        with open(filepath, 'w') as f:
+            json.dump(trajectory_data, f, indent=2)
+
+        print(f"Neural trajectory saved to {filepath}")
+        print(f"Well-formed neural suggestions: {self.neural_suggestions_well_formed}/{self.neural_suggestions_total} ({self.get_well_formed_percentage():.1f}%)")
+        return filepath
+
+
 if __name__ == "__main__":
     # Test ultra-simple first
     ultra_results = test_on_ultra_simple()
@@ -428,3 +627,4 @@ if __name__ == "__main__":
         else:
             status = "❌ Failed"
         print(f"{result['problem']}: MSE={result['mse']:.2e}, Size={result['size']} {status}")
+
