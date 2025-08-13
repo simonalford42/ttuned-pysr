@@ -92,7 +92,6 @@ def main(args):
         Only trains on target tokens, not context/population.
         """
         input_ids_list = []
-        attention_mask_list = []
         labels_list = []
 
         for i in range(len(element["context"])):
@@ -117,8 +116,7 @@ def main(args):
             if len(full_input_ids) > context_length:
                 full_input_ids = full_input_ids[:context_length]
 
-            # Pad to max length
-            attention_mask = [1] * len(full_input_ids) + [0] * (context_length - len(full_input_ids))
+            # Pad to max length (no attention_mask; rely on causal mask)
             full_input_ids = full_input_ids + [tokenizer.pad_token_id] * (context_length - len(full_input_ids))
 
             # Create labels: -100 for input part, actual tokens for target part
@@ -133,12 +131,10 @@ def main(args):
             labels = labels + [-100] * (context_length - len(labels))
 
             input_ids_list.append(full_input_ids)
-            attention_mask_list.append(attention_mask)
             labels_list.append(labels)
 
         return {
             "input_ids": torch.tensor(input_ids_list),
-            "attention_mask": torch.tensor(attention_mask_list),
             "labels": torch.tensor(labels_list),
         }
 
@@ -174,6 +170,7 @@ def main(args):
         num_train_epochs=training_config["num_train_epochs"],
         per_device_train_batch_size=training_config["per_device_train_batch_size"],
         per_device_eval_batch_size=training_config["per_device_eval_batch_size"],
+        gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 1),
         warmup_steps=training_config["warmup_steps"],
         learning_rate=training_config["learning_rate"],
         logging_steps=training_config["logging_steps"],

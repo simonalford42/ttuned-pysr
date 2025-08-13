@@ -127,3 +127,10 @@ The system is now ready to collect comprehensive evolutionary trajectory data fo
   - Added gradient_accumulation_steps=2 to maintain effective batch size
   - Reduced learning rate from 5e-4 to 3e-4 for more stable training of larger model
   - Updated output directory to "training/checkpoints/onestep-s"
+
+## 8/12 - Research Documentation Created
+- Created comprehensive research-style markdown document (symbolic_regression_approach.md) explaining the symbolic regression approach
+- Document includes formal problem definition with mathematical notation
+- Details BasicSR algorithm with population initialization, evolution operations, and fitness function
+- Explains NeuralSR algorithm including neural architecture, training data format, and neural population generation
+- Provides experimental validation framework and key contributions of the hybrid approach
