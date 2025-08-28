@@ -6,7 +6,7 @@ import time
 from datetime import datetime
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
 import torch
-from transformers import AutoTokenizer, GPTNeoForCausalLM
+from transformers import AutoTokenizer, AutoModelForCausalLM
 from training.format_utils import format_context, format_population_with_fitness, format_inference_input
 
 
@@ -425,18 +425,27 @@ class NeuralSR(BasicSR):
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Load model and tokenizer
-        self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-        self.model = GPTNeoForCausalLM.from_pretrained(model_path)
+        # Prefer tokenizer from the trained checkpoint to preserve special tokens and IDs
+        try:
+            self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        except Exception:
+            # Fallback: load base tokenizer if checkpoint tokenizer is unavailable
+            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
+            # Ensure required special tokens exist
+            special_tokens = {
+                "additional_special_tokens": [
+                    "<CONTEXT>", "<POPULATION>", "<FITNESS>", "<TARGET>"
+                ]
+            }
+            self.tokenizer.add_special_tokens(special_tokens)
+
+        # Make sure pad token is defined for generation
+        if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
+            self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        self.model = AutoModelForCausalLM.from_pretrained(model_path, trust_remote_code=True)
         self.model.to(self.device)
         self.model.eval()
-
-        # Add special tokens
-        special_tokens = {
-            "additional_special_tokens": [
-                "<CONTEXT>", "<POPULATION>", "<FITNESS>", "<TARGET>"
-            ]
-        }
-        self.tokenizer.add_special_tokens(special_tokens)
 
         # Initialize expression parser
         from expression_parser import ExpressionParser
@@ -522,17 +531,22 @@ class NeuralSR(BasicSR):
                 num_return_sequences=num_to_generate,
                 temperature=0.8,
                 do_sample=True,
-                pad_token_id=self.tokenizer.eos_token_id
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
             )
 
         # Process all generated outputs in batch
         for i in range(num_to_generate):
             # Decode the generated expression
-            generated = self.tokenizer.decode(outputs[i], skip_special_tokens=False)
+            prompt_len = inputs["input_ids"].shape[1]
+            gen_ids = outputs[i, prompt_len:]
+            generated = self.tokenizer.decode(gen_ids, skip_special_tokens=False)
+            print('generated:', generated)
 
             # Extract the target part
             if "<TARGET>" in generated:
                 target_part = generated.split("<TARGET>")[1].split(self.tokenizer.eos_token)[0].strip()
+                print(target_part)
 
                 # Extract just the first complete expression
                 first_expr = self.extract_first_expression(target_part)
@@ -547,6 +561,8 @@ class NeuralSR(BasicSR):
                     new_population.append(new_expr)
                 except:
                     print('Not well formed, falling back to basic evolution')
+                    print(generated)
+                    import pdb; pdb.set_trace()
                     # Parsing failed - not well-formed
                     # Fallback to basic evolution if parsing fails
                     child = self.generate_child_via_evolution(population, fitnesses, num_vars)
@@ -627,4 +643,3 @@ if __name__ == "__main__":
         else:
             status = "❌ Failed"
         print(f"{result['problem']}: MSE={result['mse']:.2e}, Size={result['size']} {status}")
-

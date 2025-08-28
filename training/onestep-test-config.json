@@ -1,10 +1,10 @@
 {
   "name": "onestep-tiny",
   "seed": 42,
-  "data_dir": "../data",
+  "data_dir": "data",
   "train_file": "harder_problems_one_step_train.jsonl",
   "val_file": "harder_problems_one_step_val.jsonl",
-  "model_config": "gpt-neo-tiny.json",
+  "model_config": "training/gpt-neo-tiny.json",
   "num_train": 1000,
   "context_length": 1024,
   "training_args": {

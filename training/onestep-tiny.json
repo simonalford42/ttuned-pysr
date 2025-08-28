@@ -1,5 +1,5 @@
 {
-  "name": "onestep-full",
+  "name": "onestep-tiny",
   "seed": 42,
   "data_dir": "data",
   "train_file": "harder_problems_one_step_train.jsonl",
@@ -8,7 +8,7 @@
   "num_train": -1,
   "context_length": 1024,
   "training_args": {
-    "output_dir": "training/checkpoints/onestep-full",
+    "output_dir": "training/checkpoints/onestep-tiny",
     "overwrite_output_dir": true,
     "num_train_epochs": 2,
     "per_device_train_batch_size": 4,

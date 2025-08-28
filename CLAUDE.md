@@ -1,2 +1,3 @@
 - Whenever completing a high level step, append a summary of what you did to history.md.
 - Always add default arguments to scripts so we can remember how data was created
+- When debugging training scripts, look to the stream-of-search repo to see how it was done there, because it worked in that repo, and whatever problem we face we should fix by doing what they did (we probably just didn't fully copy/translate over the code properly).

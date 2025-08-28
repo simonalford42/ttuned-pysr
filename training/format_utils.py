@@ -52,8 +52,9 @@ def extract_variables_operators_constants(trajectory_data):
 
 def format_input_part(bos_token, context, population):
     """Format the input part with special tokens for training/inference"""
+    bos = bos_token or ""
     return (
-        bos_token +
+        bos +
         "<CONTEXT>" + context +
         "<POPULATION>" + population
     )
@@ -66,8 +67,9 @@ def format_target_part(target, eos_token):
 
 def format_inference_input(bos_token, context, population):
     """Format input for model inference (includes TARGET prompt)"""
+    bos = bos_token or ""
     return (
-        bos_token +
+        bos +
         "<CONTEXT>" + context +
         "<POPULATION>" + population +
         "<TARGET>"

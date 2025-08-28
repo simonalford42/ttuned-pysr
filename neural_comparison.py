@@ -104,7 +104,7 @@ def compare_neural_vs_basic(checkpoint_path, problem_idx=0, collect_trajectories
 def main():
     parser = argparse.ArgumentParser(description="Compare neural vs basic SR")
     parser.add_argument("--checkpoint",
-                       default="training/checkpoints/onestep-full_20250811_145316/checkpoint-60000",
+                       default="training/checkpoints/onestep-full_20250811_145316/final_model",
                        help="Path to trained model checkpoint")
     parser.add_argument("--problem", type=int, default=0,
                        help="Problem index to test (default: 0)")

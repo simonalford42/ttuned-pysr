@@ -263,7 +263,7 @@ Hmm, given that we train models this way, maybe we can structure the training di
       "(2.0 * x0)",
       "((x0 + 2.0) * (x1 - x2))",
       "(x1 * x2)",
-      "((2.0 / x1) * x0)",
+      "((2.0 / x1) * x0)",Gjk
       "(x0 + 1.0)",
       "(x2 * x1)",
       "1.0",
@@ -316,3 +316,66 @@ Write code which loads a trained model (trained with train_one_step.py) and runs
 
 # 8/12
 IN basic_sr.py, rewrite NeuralSR's generate_population so that it generates all members of the new population at the same time in parallel by sampling N outputs from the input string, and then processing them each.
+
+# 8/26
+Training the GPT neo tiny model is working, but doing it with the small model is not working.
+Training the small model was done via train_one_step.py --config onestep-tiny.json
+For the larger model, we had to switch to using acclerate for the distributed training. So, for example, in submit_jobs.sh, we'd submit:
+`sbatch -J ttsr2 --partition ellis run2.sh accelerate launch --config_file training/accelerate.yaml training/train_one_step.py --config training/onestep-s.json`
+I kept getting errors running this. For example, in out/49913.out, the error:
+
+Traceback (most recent call last):
+  File "/home/sca63/ttuned-pysr/training/train_one_step.py", line 266, in <module>
+    main(args)
+  File "/home/sca63/ttuned-pysr/training/train_one_step.py", line 254, in main
+    trainer.train()
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/transformers/trainer.py", line 2237, in train
+    return inner_training_loop(
+           ^^^^^^^^^^^^^^^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/transformers/trainer.py", line 2392, in _inner_training_loop
+    model, self.optimizer = self.accelerator.prepare(self.model, self.optimizer)
+                            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/accelerate/accelerator.py", line 1453, in prepare
+    result = tuple(
+             ^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/accelerate/accelerator.py", line 1454, in <genexpr>
+    self._prepare_one(obj, first_pass=True, device_placement=d) for obj, d in zip(args, device_placement)
+    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/accelerate/accelerator.py", line 1302, in _prepare_one
+    return self.prepare_model(obj, device_placement=device_placement)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/accelerate/accelerator.py", line 1669, in prepare_model
+    model = torch.nn.parallel.DistributedDataParallel(
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/torch/nn/parallel/distributed.py", line 835, in __init__
+    _verify_param_shape_across_processes(self.process_group, parameters)
+  File "/home/sca63/.conda/envs/ttsr/lib/python3.12/site-packages/torch/distributed/utils.py", line 282, in _verify_param_shape_across_processes
+    return dist._verify_params_across_processes(process_group, tensors, logger)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: DDP expects same model across all ranks, but Rank 0 has 212 params, while rank 1 has inconsistent 0 params.
+
+I tried debugging this with claude code and gpt codex, but didn't make any progress, kept getting the same error. Decided we should just directly read the code and see what's different between our distributed setup and the original distributed set up in the original stream-of-search repo. Looking at it, a lot is different! All of the config params are different.
+Makes me think that I should just manually do the following:
+1. run the stream of search train script, modifying it to only run for 10 minutes of gradient steps or so. check that it runs without issues on our cluster.
+2. modify our script so that it's exactly the same set up as the stream of search script.
+
+Look at the stream of search repo. Create a command to put in submit_jobs.sh that uses run2.sh to launch the job for the stream-of-search repo. Maybe it's easiest to copy submit_jobs.sh and run2.sh into the stream of search repo in the appropriate place, so that the paths work out more easily.
+
+# Fixing BOS/EOS token issues for current trained model
+It seems like there might be an issue with how my model is trained. I trained this model using training/train_one_step.py --config onestep-tiny.json. When I run neural_comparison.py, I get the following output (just a subset is shown):
+
+--- Neural SR ---
+Starting evolution with 20 individuals
+Gen 0: MSE=43.292614, Size=3, Expr=(x1 * x1)
+generated: (x0 * x1) <FITNESS>-43.32<TARGET>((x1 - x1) / (x0 - 2.0)) <FITNESS>-1014259.84<TARGET>(x2 + 2.0) <FITNESS>-
+((x1 - x1) / (x0 - 2.0)) <FITNESS>-1014259.84
+generated: x2 * 1.0) <FITNESS>-112.05<TARGET>x2 * (x0 * x0)) <FITNESS>-111.52<TARGET>(x1 * x1) <FITNESS>-43.32<TARGET>(x1 * x
+x2 * (x0 * x0)) <FITNESS>-111.52
+generated: x1 * x1) <FITNESS>-43.32 ((x0 + x0) + 1.0) <FITNESS>-100.40<TARGET>(x0 + 1.0) * 1.0) <FITNESS>-100.42
+(x0 + 1.0) * 1.0) <FITNESS>-100.42
+generated: (x1 * 2.0) <FITNESS>-115.04<TARGET>(x1 * x1) <FITNESS>-43.32<TARGET>x0 * x1) <FITNESS>-43.32<TARGET>(1.0 / x1)
+(x1 * x1) <FITNESS>-43.32k
+
+
+This seems wrong because I would expect from the training and training data that the model should only "complete" the input with a single target expression and then finish with an EOS token. But instead we see TARGET (expr) <FITNESS> (fitness) <TARGET> ... etc. which has issues of (1) target repeated multiple times, multiple expressions suggested, (2) fitness is included too.
+Can you look at the trianing code and try to figure out why this is happening.
