@@ -181,6 +181,83 @@ def test_trajectory_disabled():
     print("✓ Trajectory collection properly disabled")
 
 
+def create_tiny_pythagorean_dataset(time_limit=30, seed=42):
+    """Create a tiny dataset with single trajectory from pythagorean_3d for overfitting tests"""
+    print("=== Creating Tiny Dataset for Overfitting Test ===")
+    print("Single trajectory from BasicSR solving pythagorean_3d")
+    
+    from problems import pythagorean_3d
+    import numpy as np
+    
+    # Generate data for pythagorean_3d
+    X, y = pythagorean_3d(seed=seed)
+    print(f"Problem: {pythagorean_3d.__doc__}")
+    print(f"Data shape: X={X.shape}, y range=[{y.min():.3f}, {y.max():.3f}]")
+    
+    # Create BasicSR with trajectory collection enabled
+    model = BasicSR(
+        population_size=20,
+        num_generations=1000,  # High number, will be stopped by time limit
+        max_depth=4,
+        max_size=15,
+        tournament_size=3,
+        collect_trajectory=True,
+        time_limit=time_limit
+    )
+    
+    # Fit and collect trajectory
+    print(f"Running BasicSR for {time_limit}s...")
+    start_time = time.time()
+    model.fit(X, y)
+    actual_time = time.time() - start_time
+    
+    # Get final results
+    if model.best_model_:
+        y_pred = model.predict(X)
+        final_mse = float(np.mean((y - y_pred)**2))
+        final_expression = str(model.best_model_)
+    else:
+        final_mse = float('inf')
+        final_expression = None
+    
+    print(f"Completed: {len(model.trajectory)} generations recorded")
+    print(f"Final MSE: {final_mse:.2e}")
+    print(f"Final expression: {final_expression}")
+    
+    # Create trajectory data in the expected format
+    trajectory_data = {
+        'pythagorean_3d': [{
+            'metadata': {
+                'timestamp': datetime.now().isoformat(),
+                'problem_name': 'pythagorean_3d',
+                'problem_description': pythagorean_3d.__doc__,
+                'run_number': 1,
+                'population_size': model.population_size,
+                'num_generations': model.num_generations,
+                'max_depth': model.max_depth,
+                'max_size': model.max_size,
+                'tournament_size': model.tournament_size,
+                'time_limit': time_limit,
+                'actual_time': actual_time,
+                'total_generations_recorded': len(model.trajectory),
+                'final_mse': final_mse,
+                'final_expression': final_expression
+            },
+            'trajectory': model.trajectory
+        }]
+    }
+    
+    # Save the trajectory data
+    filename = save_trajectories(trajectory_data, "tiny_pythagorean")
+    
+    print(f"\\n=== Tiny Dataset Created ===")
+    print(f"Trajectory file: {filename}")
+    print(f"Generations recorded: {len(model.trajectory)}")
+    print(f"Use convert_trajectories.py to convert to training format")
+    
+    return filename
+
+
 if __name__ == "__main__":
     print("Trajectory Collection for Harder Problems")
     print("="*50)

@@ -140,6 +140,39 @@ def split_train_val(input_file, train_file, val_file, val_split=0.1, seed=42):
     return len(train_data), len(val_data)
 
 
+def create_tiny_training_data(input_file):
+    """Convert tiny dataset and create train/val files (duplicate for overfitting test)"""
+    print(f"Converting tiny dataset from {input_file}")
+    
+    # Generate output filenames
+    base_name = input_file.replace('.json', '').replace('data/', 'data/tiny_training_')
+    temp_file = f"{base_name}.jsonl"
+    train_file = f"{base_name}_train.jsonl"
+    val_file = f"{base_name}_val.jsonl"
+    
+    # Convert trajectories
+    converted_data = convert_basicsr_to_one_step_format(input_file, temp_file)
+    
+    # For overfitting test, use same data for train and val
+    print(f"Creating train/val files (same data for overfitting test)")
+    
+    import shutil
+    shutil.copy(temp_file, train_file)
+    shutil.copy(temp_file, val_file)
+    
+    # Remove temporary file
+    import os
+    os.remove(temp_file)
+    
+    print(f"Tiny training dataset created:")
+    print(f"  - Training examples: {len(converted_data)}")
+    print(f"  - Train file: {train_file}")
+    print(f"  - Val file: {val_file}")
+    print(f"  - Both files identical (for overfitting test)")
+    
+    return train_file, val_file, len(converted_data)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Convert BasicSR trajectories to training formats")
     parser.add_argument("--input", default="data/harder_problems_all_20250807_163319.json", help="Input file")

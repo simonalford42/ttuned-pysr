@@ -379,3 +379,14 @@ generated: (x1 * 2.0) <FITNESS>-115.04<TARGET>(x1 * x1) <FITNESS>-43.32<TARGET>x
 
 This seems wrong because I would expect from the training and training data that the model should only "complete" the input with a single target expression and then finish with an EOS token. But instead we see TARGET (expr) <FITNESS> (fitness) <TARGET> ... etc. which has issues of (1) target repeated multiple times, multiple expressions suggested, (2) fitness is included too.
 Can you look at the trianing code and try to figure out why this is happening.
+
+
+# 9/9 Evaluation
+Training stuff is working a lot better now (i did some stuff not written about above). I'd like to work on evaluation. neural_comparison.py is a great comparison. I'd like to do a more thorough evaluation comparing Basic SR algorithm to the Neural SR algorithm. Please write an evaluation file called simple_evaluation.py which does the following:
+- Does the basic vs neural comparison for all five "harder problems" from problems.py.
+- For each problem, run N instances of Basic SR and N instances of Neural SR. Try to make Neural SR efficient (maybe we can put all N into one batch for each generation?). Then calcualte, print out and save to a json file statistics such as mean/std final MSE, avg # iterations to reach MSE ~0 (for those which succeeded), % that reached MSE ~0.
+- Look at neural_comparison.py for inspiration for how to do this before doing it.
+- If you have any other ideas for good metrics to include, run them by me before implementing.
+
+# 9/9 overfitting training run.
+Can you make a new dataset that is just a single trace from basic SR solving pythagorean 3d. I'd like to overfit to a tiny dataset to make sure things are working properly. Maybe read over this whole readme file to remember the files for where data is created.

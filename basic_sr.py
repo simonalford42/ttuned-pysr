@@ -83,6 +83,7 @@ class BasicSR:
         self.best_model_ = None
         self.trajectory = []
         self.generation_count = 0
+        self.best_progression = []  # Track (generation, expression, mse) when best improves
 
     def create_terminal(self, num_vars):
         """Create a terminal node (variable or constant)"""
@@ -283,12 +284,11 @@ class BasicSR:
         best_individual = None
         start_time = time.time()
 
-        # Reset trajectory for new run
+        # Reset trajectory and progression for new run
         if self.collect_trajectory:
             self.trajectory = []
             self.generation_count = 0
-
-        print(f"Starting evolution with {len(population)} individuals")
+        self.best_progression = []  # Always reset progression tracking
 
         for generation in range(self.num_generations):
             # Check time limit
@@ -316,6 +316,16 @@ class BasicSR:
                 # Calculate actual MSE for reporting
                 y_pred = best_individual.evaluate(X)
                 mse = np.mean((y - y_pred)**2)
+                
+                # Track progression of best solutions
+                self.best_progression.append({
+                    'generation': generation,
+                    'expression': str(best_individual),
+                    'mse': float(mse),
+                    'fitness': float(best_fitness),
+                    'size': best_individual.size()
+                })
+                
                 print(f"Gen {generation}: MSE={mse:.6f}, Size={best_individual.size()}, Expr={best_individual}")
 
                 # Check for near-zero MSE early stopping
@@ -338,6 +348,23 @@ class BasicSR:
         if self.best_model_ is None:
             raise ValueError("Model not fitted yet")
         return self.best_model_.evaluate(X)
+    
+    def get_iterations_to_convergence(self, mse_threshold=1e-6):
+        """Get the generation number when MSE first dropped below threshold"""
+        for entry in self.best_progression:
+            if entry['mse'] < mse_threshold:
+                return entry['generation']
+        return None  # Never converged
+    
+    def get_final_mse(self):
+        """Get the final best MSE achieved"""
+        if not self.best_progression:
+            return float('inf')
+        return self.best_progression[-1]['mse']
+    
+    def get_progression_data(self):
+        """Get the full progression data"""
+        return self.best_progression.copy()
 
     def save_trajectory(self, filename):
         """Save the collected trajectory to a JSON file"""
@@ -554,7 +581,6 @@ class NeuralSR(BasicSR):
 
         # Create input prompt using shared formatting
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
-        print(f'input_text={input_text}')
 
         # Tokenize and generate all members in parallel
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
@@ -603,10 +629,6 @@ class NeuralSR(BasicSR):
 
             # Decode, skipping special tokens to avoid <|endoftext|> noise
             generated = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
-            if generated:
-                print('generated:', generated)
-            else:
-                print('generated: [empty]')
 
             # Treat the generated text itself as the target part
             target_part = generated
@@ -635,8 +657,8 @@ class NeuralSR(BasicSR):
                 self.neural_suggestions_well_formed += 1
                 new_population.append(new_expr)
             except Exception:
-                print('Not well formed, falling back to basic evolution')
-                print(first_expr or generated)
+                # print('Not well formed, falling back to basic evolution')
+                # print(first_expr or generated)
                 # Fallback to basic evolution if parsing fails
                 child = self.generate_child_via_evolution(population, fitnesses, num_vars)
                 new_population.append(child)
