@@ -7,6 +7,7 @@ import json
 import os
 import random
 from typing import Dict, Any
+ 
 
 import torch
 from accelerate import Accelerator
@@ -136,6 +137,7 @@ def main(args):
         """
         input_ids_list = []
         labels_list = []
+ 
 
         for i in range(len(element["context"])):
             context = element["context"][i]
@@ -193,6 +195,8 @@ def main(args):
         desc="Tokenizing datasets"
     )
 
+    # Length distribution debug code removed per request.
+
     # Use a simple collator that preserves our precomputed labels
     # (DataCollatorForLanguageModeling would overwrite labels for causal LM)
     from transformers import default_data_collator
@@ -249,17 +253,25 @@ def main(args):
         gradient_accumulation_steps=training_config.get("gradient_accumulation_steps", 1),
         warmup_steps=training_config["warmup_steps"],
         learning_rate=training_config["learning_rate"],
+        weight_decay=training_config.get("weight_decay", 0.0),
+        lr_scheduler_type=training_config.get("lr_scheduler_type", "linear"),
+        
         logging_steps=training_config["logging_steps"],
         save_steps=training_config["save_steps"],
         eval_steps=training_config["eval_steps"],
         eval_strategy=training_config["evaluation_strategy"],
         save_strategy=training_config["save_strategy"],
+        save_total_limit=training_config.get("save_total_limit", None),
+        
         load_best_model_at_end=training_config["load_best_model_at_end"],
         metric_for_best_model=training_config["metric_for_best_model"],
         greater_is_better=training_config["greater_is_better"],
         dataloader_drop_last=training_config["dataloader_drop_last"],
         remove_unused_columns=training_config["remove_unused_columns"],
         bf16=training_config["bf16"],
+        fp16=training_config.get("fp16", False),
+        max_grad_norm=training_config.get("max_grad_norm", 1.0),
+        
         ddp_find_unused_parameters=False,
         gradient_checkpointing=True,
         report_to="wandb" if "wandb" in config else "none",
@@ -301,6 +313,7 @@ if __name__ == "__main__":
     parser.add_argument("--resume", action="store_true", help="Resume training from a checkpoint path")
     parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint directory to resume from")
     parser.add_argument("--reset", action="store_true", help="Initialize model weights from a pretrained checkpoint for fine-tuning")
+    
     args = parser.parse_args()
 
     main(args)

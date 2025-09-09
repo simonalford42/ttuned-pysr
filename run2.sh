@@ -10,7 +10,7 @@
 #SBATCH -n 1
 #SBATCH --requeue
 #SBATCH --mem=100G
-#SBATCH --gres=gpu:nvidia_rtx_a6000:2
+#SBATCH --gres=gpu:nvidia_rtx_a6000:1
 #SBATCH --partition=ellis
 #SBATCH --time=72:00:00
 
