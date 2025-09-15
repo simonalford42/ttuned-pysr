@@ -99,8 +99,8 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
 
         # Generate new populations for next iteration
         if generation < max_generations - 1:  # Don't generate if this is the last iteration
-            basic_population = basic_sr.generate_new_population(basic_population, basic_fitnesses, basic_best_individual, num_vars)
-            neural_population = neural_sr.generate_new_population(neural_population, neural_fitnesses, neural_best_individual, num_vars)
+            basic_population = basic_sr.generate_new_population(basic_population, basic_fitnesses, basic_best_individual, num_vars, generation + 1)
+            neural_population = neural_sr.generate_new_population(neural_population, neural_fitnesses, neural_best_individual, num_vars, generation + 1)
 
     # Final summary
     print(f"\n=== Final Results ===")

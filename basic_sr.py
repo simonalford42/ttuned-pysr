@@ -70,7 +70,10 @@ class BasicSR:
                  max_size=15,
                  tournament_size=3,
                  collect_trajectory=False,
-                 time_limit=None):
+                 time_limit=None,
+                 early_stop=True,
+                 early_stop_threshold=3e-16,
+                 min_generations=0):
         self.population_size = population_size
         self.num_generations = num_generations
         self.max_depth = max_depth
@@ -84,6 +87,9 @@ class BasicSR:
         self.trajectory = []
         self.generation_count = 0
         self.best_progression = []  # Track (generation, expression, mse) when best improves
+        self.early_stop = early_stop
+        self.early_stop_threshold = early_stop_threshold
+        self.min_generations = min_generations
 
     def create_terminal(self, num_vars):
         """Create a terminal node (variable or constant)"""
@@ -240,7 +246,7 @@ class BasicSR:
             child = self.mutate(parent, num_vars)
         return child
 
-    def generate_new_population(self, population, fitnesses, best_individual, num_vars):
+    def generate_new_population(self, population, fitnesses, best_individual, num_vars, generation=0):
         """Generate new population using BasicSR evolution operators"""
         new_population = []
 
@@ -316,7 +322,7 @@ class BasicSR:
                 # Calculate actual MSE for reporting
                 y_pred = best_individual.evaluate(X)
                 mse = np.mean((y - y_pred)**2)
-                
+
                 # Track progression of best solutions
                 self.best_progression.append({
                     'generation': generation,
@@ -325,18 +331,19 @@ class BasicSR:
                     'fitness': float(best_fitness),
                     'size': best_individual.size()
                 })
-                
+
                 print(f"Gen {generation}: MSE={mse:.6f}, Size={best_individual.size()}, Expr={best_individual}")
 
                 # Check for near-zero MSE early stopping
-                if mse <= 3e-16:
+                # Honor early-stopping only after a minimum number of generations
+                if self.early_stop and (generation + 1) >= self.min_generations and mse <= self.early_stop_threshold:
                     print(f"MSE reached near-zero ({mse:.2e}). Stopping evolution.")
                     break
 
             # print(f"Gen {generation}: MSE={mse:.6f}, Size={best_individual.size()}, Expr={best_individual}")
 
             # Create new population
-            population = self.generate_new_population(population, fitnesses, best_individual, num_vars)
+            population = self.generate_new_population(population, fitnesses, best_individual, num_vars, generation)
             if self.collect_trajectory:
                 self.generation_count += 1
 
@@ -348,20 +355,20 @@ class BasicSR:
         if self.best_model_ is None:
             raise ValueError("Model not fitted yet")
         return self.best_model_.evaluate(X)
-    
+
     def get_iterations_to_convergence(self, mse_threshold=1e-6):
         """Get the generation number when MSE first dropped below threshold"""
         for entry in self.best_progression:
             if entry['mse'] < mse_threshold:
                 return entry['generation']
         return None  # Never converged
-    
+
     def get_final_mse(self):
         """Get the final best MSE achieved"""
         if not self.best_progression:
             return float('inf')
         return self.best_progression[-1]['mse']
-    
+
     def get_progression_data(self):
         """Get the full progression data"""
         return self.best_progression.copy()
@@ -516,11 +523,11 @@ class NeuralSR(BasicSR):
         self.neural_suggestions_total = 0
         self.neural_suggestions_well_formed = 0
 
-    def format_context_and_population(self, population, fitnesses, num_vars):
+    def format_context_and_population(self, population, fitnesses, num_vars, generation=0):
         """Format context and population for the neural model"""
         # Format context using shared utility
         variables = [f"x{i}" for i in range(num_vars)]
-        context = format_context(variables, self.operators, self.constants)
+        context = format_context(generation, variables, self.operators, self.constants)
 
         # Format population using shared utility
         expressions = [str(expr) for expr in population]
@@ -566,7 +573,7 @@ class NeuralSR(BasicSR):
         text = text.strip()
         return self.expr_parser.parse(text)
 
-    def generate_new_population(self, population, fitnesses, best_individual, num_vars):
+    def generate_new_population(self, population, fitnesses, best_individual, num_vars, generation=0):
         """Generate new population using neural model predictions with parallel sampling"""
         new_population = []
 
@@ -574,13 +581,14 @@ class NeuralSR(BasicSR):
         new_population.append(best_individual.copy())
 
         # Format input for neural model
-        context, population_str = self.format_context_and_population(population, fitnesses, num_vars)
+        context, population_str = self.format_context_and_population(population, fitnesses, num_vars, generation)
 
         # Calculate how many new members we need to generate
         num_to_generate = self.population_size - 1  # -1 for elitism
 
         # Create input prompt using shared formatting
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
+        # print(input_text)
 
         # Tokenize and generate all members in parallel
         inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
@@ -597,6 +605,8 @@ class NeuralSR(BasicSR):
             )
 
         # Process all generated outputs in batch
+        all_predicted_targets = []  # Collect all targets first
+
         for i in range(num_to_generate):
             # Decode only up to the first stop token
             prompt_len = inputs["input_ids"].shape[1]
@@ -647,7 +657,13 @@ class NeuralSR(BasicSR):
 
             # Extract just the first complete expression
             first_expr = self.extract_first_expression(target_part)
+            all_predicted_targets.append(first_expr if first_expr else generated)
 
+        # Print all predicted targets on one line separated by spaces
+        print("PREDICTED TARGETS:", " ".join(all_predicted_targets))
+
+        # Now parse and add to population
+        for i, first_expr in enumerate(all_predicted_targets):
             # Track neural suggestion statistics
             self.neural_suggestions_total += 1
 

@@ -390,3 +390,23 @@ Training stuff is working a lot better now (i did some stuff not written about a
 
 # 9/9 overfitting training run.
 Can you make a new dataset that is just a single trace from basic SR solving pythagorean 3d. I'd like to overfit to a tiny dataset to make sure things are working properly. Maybe read over this whole readme file to remember the files for where data is created.
+
+# 9/12 generating a training set.
+Up to now, the symbolic regression algorithm has been training and testing on the same problems. I'd now like to make a proper train/validation set, and then use the "harder problems" (from problems.py) as the test set.
+
+The training data has two forms: first, the list of expressions that are targets. Second, the result of running BasicSR on these expressions. So, there are different parameters for the training data generation process, that we should store as metadata: the exact command run to generate the data, the max expression complexity, the list of operators/constants used, the number of expressions, seed, and the basicSR hyperparameters (number of expressions, seed, max number of generations, max depth, max size, others if needed). and others as appropriate.
+
+The training set should be saved in two formats: the list of expressions, and the traces of BasicSR for those expressions.
+
+Then we can split the set into training and validation sets. For the validation set, we can store both expressions and traces of expressions too.
+
+Can you make an outline of files/function names, API, etc. for this, then if it looks good I'll have you implement it.
+
+# 9/12 adding more context to SR algorithm
+One of the advantages of training a neural network to propose expressions to be evaluated with SR is that the NN can incorporate rich context for guiding search. Typical SR "blindly" suggests new expressions by random mutations. Instead, we can try to have a smarter search. To do so, we can add additional information into the context (aka the input that the NN receives when it proposes new expressions).
+
+See how context is created in format_utils.py. Now, let's add additional context for a problem. To start, we'll just add context for the target expression: visual/informational signals based off the input data. Can you modify format_utils.py so that there's the option of adding context when creating the dataset of examples. keep in mind how format_context function in format_utils is used by convert_trajectories.py. We should change convert_trjaectories too so it has an argument for the type of context. for now, do 'basic' context and 'rich' context.
+
+for the rich context, let's add: (1) moments of the data, up to the third moment. (2) min and max of the data, (3) anything else we should add? please propose some ideas.
+
+then we'll have 'superrich' context which also does a small plot of the data. add flags for this and a method stub which creates the small plot (in text) for the model, but don't implement it.

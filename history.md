@@ -1,3 +1,65 @@
+## Implemented Training Data Generation System (9/12/2025)
+
+Successfully implemented a complete training data generation system with three main components:
+
+### 1. Expression Generator (`generate_expressions.py`)
+- Generates synthetic polynomial expressions for training
+- Configurable parameters: max degree, max variables, constants
+- Supports reproducible generation with seed control
+- Saves expressions with metadata and data generation functions
+
+### 2. Trace Generator (`generate_traces.py`) 
+- Runs BasicSR on expression datasets to collect evolutionary trajectories
+- Integrates with existing `collect_trajectories.py` infrastructure
+- Configurable BasicSR parameters (population size, generations, time limits)
+- Saves complete trajectory data with metadata
+
+### 3. Dataset Manager (`dataset_manager.py`)
+- Manages end-to-end pipeline from expressions → traces → training data
+- Converts traces to one-step prediction format using existing `convert_trajectories.py`
+- Creates train/validation splits with configurable ratios
+- Handles dataset versioning, validation, and metadata tracking
+
+### Test Results
+Created and validated test dataset `test_small`:
+- 5 expressions, 10 generations each
+- Generated 20 training examples (16 train, 4 val)
+- Traces correctly capture population evolution between generations
+- Training data format compatible with existing model training pipeline
+- All data validation checks passed
+
+The system successfully builds on existing infrastructure while providing proper dataset management and reproducibility.
+
+## Enhanced Context System for Neural SR (9/12/2025)
+
+Implemented rich context functionality to provide neural models with more informative data about the symbolic regression problems:
+
+### Context Types
+1. **Basic Context** - Traditional format: `x0,x1 | +,-,*,/ | 1.0,2.0` (22 chars)
+2. **Rich Context** - Adds data statistics: basic + `STATS: range=[...] | mean=... | var=... | skew=... | monotonic=... | zeros=... | complexity=...` (~134 chars)
+3. **SuperRich Context** - Rich + ASCII text plot: rich + `PLOT: [ASCII visualization]` (~568 chars)
+
+### Rich Context Features
+- **Data moments**: mean, variance, skewness of target values
+- **Range information**: min/max values for inputs and outputs
+- **Function characteristics**: monotonicity detection, zero crossings count
+- **Complexity measure**: normalized total variation metric
+- **ASCII plots**: Text-based visualization for 1D functions (superrich only)
+
+### Implementation
+- Enhanced `format_utils.py` with `compute_data_statistics()` and contextual formatting
+- Updated `convert_trajectories.py` to support `--context_type` argument
+- Added data context loading for problems requiring rich statistics
+- Maintained backward compatibility with existing basic context
+
+### Test Results
+- Successfully converted trajectories with all three context types
+- Context length scales appropriately: 22 → 134 → 568 characters
+- ASCII plots render correctly for constant/linear/nonlinear functions
+- Rich context provides meaningful statistical summaries of data
+
+This enhancement allows neural models to incorporate problem-specific information during search, potentially leading to more intelligent expression suggestions.
+
 ## Refactored MinimalSR to BasicSR
 
 Successfully refactored the MinimalSR class with the following changes:
@@ -134,3 +196,13 @@ The system is now ready to collect comprehensive evolutionary trajectory data fo
 - Details BasicSR algorithm with population initialization, evolution operations, and fitness function
 - Explains NeuralSR algorithm including neural architecture, training data format, and neural population generation
 - Provides experimental validation framework and key contributions of the hybrid approach
+
+## 9/15 - Enhanced Context with Generation Numbers
+- Modified format_context() in format_utils.py to include generation parameter as first argument
+- Updated function documentation to describe the new generation parameter
+- Updated all call sites across the codebase to pass generation numbers:
+  - basic_sr.py: Updated format_context_and_population() and generate_new_population() methods to accept and pass generation
+  - superrich_demo.py and test_context_system.py: Updated calls to use generation 0 for demo/test purposes
+  - convert_trajectories.py: Updated to use loop index (generation number) when creating context
+  - fine_grained_comparison.py: Updated to pass correct generation numbers
+- This allows the neural model to understand which generation it's working on during training and inference

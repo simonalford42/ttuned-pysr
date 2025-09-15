@@ -5,13 +5,20 @@ import json
 import argparse
 import random
 from pathlib import Path
-from format_utils import extract_variables_operators_constants, format_context, format_population_with_fitness
+from format_utils import extract_variables_operators_constants, format_context, format_population_with_fitness, compute_data_statistics
+import numpy as np
 
 
-def convert_basicsr_to_one_step_format(input_file, output_file):
+def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', data_context=None):
     """
     Convert BasicSR trajectory JSON to one-step prediction format.
     Each trajectory becomes multiple training examples (one for each generation transition).
+    
+    Args:
+        input_file: Input JSON file with trajectories
+        output_file: Output JSONL file  
+        context_type: 'basic', 'rich', or 'superrich' context level
+        data_context: Dict mapping problem_name -> {'X': X_data, 'y': y_data} for rich context
     """
     with open(input_file, 'r') as f:
         data = json.load(f)
@@ -54,11 +61,22 @@ def convert_basicsr_to_one_step_format(input_file, output_file):
             # Extract variables, operators, constants from this trajectory
             variables, operators, constants = extract_variables_operators_constants(trajectory_data)
 
-            # Create context header using shared formatting
-            context_header = format_context(variables, operators, constants)
+            # Compute data statistics for rich context if needed
+            data_stats = None
+            if context_type in ['rich', 'superrich'] and data_context and problem_name in data_context:
+                problem_data = data_context[problem_name]
+                X, y = problem_data['X'], problem_data['y']
+                data_stats = compute_data_statistics(X, y)
+                
+                # Add text plot for superrich context
+                if context_type == 'superrich':
+                    from format_utils import create_text_plot
+                    data_stats['text_plot'] = create_text_plot(X, y)
 
             # Create one training example for each generation transition
             for i in range(len(trajectory_data) - 1):
+                # Create context header using shared formatting with context type and current generation
+                context_header = format_context(i, variables, operators, constants, context_type, data_stats)
                 current_gen = trajectory_data[i]
                 next_gen = trajectory_data[i + 1]
 
@@ -177,10 +195,21 @@ def main():
     parser = argparse.ArgumentParser(description="Convert BasicSR trajectories to training formats")
     parser.add_argument("--input", default="data/harder_problems_all_20250807_163319.json", help="Input file")
     parser.add_argument("--output", default="data/harder_problems_one_step.jsonl", help="Output file (temporary, will be split)")
+    parser.add_argument("--context_type", default="basic", choices=["basic", "rich", "superrich"], 
+                       help="Context type to use: basic (default), rich (with data stats), or superrich (with plot)")
+    parser.add_argument("--data_context", help="Optional JSON file with data context for rich/superrich modes")
     args = parser.parse_args()
 
+    # Load data context if provided
+    data_context = None
+    if args.data_context and args.context_type in ['rich', 'superrich']:
+        with open(args.data_context, 'r') as f:
+            data_context = json.load(f)
+        print(f"Loaded data context from {args.data_context} for {args.context_type} context")
+
     # Convert trajectories to temporary file
-    converted_data = convert_basicsr_to_one_step_format(args.input, args.output)
+    converted_data = convert_basicsr_to_one_step_format(args.input, args.output, args.context_type, data_context)
+    print(f"Using {args.context_type} context type")
 
     # Generate train/val file names based on output file
     base_name = args.output.replace('.jsonl', '')
