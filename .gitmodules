@@ -1,0 +1,3 @@
+[submodule "e2e_sr"]
+	path = e2e_sr
+	url = https://github.com/simonalford42/e2e_sr
