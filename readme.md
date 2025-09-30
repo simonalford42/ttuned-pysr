@@ -410,3 +410,42 @@ See how context is created in format_utils.py. Now, let's add additional context
 for the rich context, let's add: (1) moments of the data, up to the third moment. (2) min and max of the data, (3) anything else we should add? please propose some ideas.
 
 then we'll have 'superrich' context which also does a small plot of the data. add flags for this and a method stub which creates the small plot (in text) for the model, but don't implement it.
+
+# 9/12 training set generation improvements
+I have looked at the training data generation stuff you made (dataset_manager.py, generate_expressions.py, generate_traces.py) and have some changes. I looked at the jsons files for expressions and traces and updated the API (removed unnecessary fields). see expressions/train_expressions_*_improved.json and traces/traces_*_improved.json for how I want them to look compared with the original. please change the implementation accordingly. then regenerate a small dataset and corresponding files so I can check them again.
+
+# 9/15
+I'd like to create a training set. Run basic_sr for 10k generations (or until expression with MSE 0 is found, and add 100 generations each time an improvement is still seen (like still MSE 0 but with lower complexity).
+
+To get a sense of complexity distribution, let's first do a test script of generating 5 random expressions of complexity 5, 10, 15, 20, ... and see what number out of five can be solved (MSE = 0) in 10k generations. If you get to 0/5, then do one more complexity then stop if that one's 0/5 too.
+
+
+# 9/15 new test solve compelxity
+the test solve complexity script is good. but now i'd like to do it with the 'real' generate_expressions. check out generate_expressions.py. for increasing rates of max_degree and max_vars, generate sets of 5 expressions with it, and see what % we solve with it. 10k generations for each expression like before.
+
+
+# 9/26 improve expression generation.
+The dataset_manager.py with generate_traces.py and generate_expressions.py needs an improved expression generation procedure. The current one generates random polynomials, but this isn't the right thing to be making for a dataset of symbolic regression problems.
+
+The reason is that randomly assigning an exponent to a polynomial makes the problem suddenly much harder.
+Instead, the expressions should be generated with knowledge of the base operators available.
+
+Make a new function with the following signature:
+
+generate_expressions(
+  operators = ['+', '-', '*', '/'],
+  constants = [1.0, 2.0],
+  n_expressions,
+  max_size,
+  min_size,
+  seed,
+)
+
+and the function should:
+1. generate n expressions with size uniformly between min and max size
+2. maybe do other stuff (make sure the expression is well formed, simplify it with sympy before providing it as a target)
+
+also, the function should work with operators like exp, log_10, or a^b if those are provided.
+
+As a test for the function, write a test script which samples 10 expressiosn using this function, and runs basic_sr on them. Expressions should be between complexity 5 and 40.
+

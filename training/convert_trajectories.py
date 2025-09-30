@@ -27,81 +27,130 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
 
     # Detect format and extract trajectories
     if "trajectories" in data:
-        # Old format: data["trajectories"][problem_name] = [runs...]
-        trajectories_dict = data["trajectories"]
-        trajectory_key = "trajectory_data"
-        problem_doc_key = "problem_doc"
+        trajectories = data["trajectories"]
+
+        # Check if it's the new flat array format
+        if isinstance(trajectories, list):
+            # New improved format: data["trajectories"] = [runs...]
+            runs = trajectories
+            trajectory_key = "trajectory"
+            problem_doc_key = "target_expression"
+            final_mse_key = "final_mse"
+            run_id_key = "run_id"
+            is_flat_format = True
+        else:
+            # Old format: data["trajectories"][problem_name] = [runs...]
+            trajectories_dict = trajectories
+            trajectory_key = "trajectory_data"
+            problem_doc_key = "problem_doc"
+            final_mse_key = "final_mse"
+            run_id_key = "run_id"
+
+            # Process each problem separately
+            problem_runs = []
+            for problem_name, runs in trajectories_dict.items():
+                problem_runs.extend([(problem_name, run) for run in runs])
+            runs = problem_runs
+            is_flat_format = False
+    elif isinstance(data, list):
+        # Raw flat array format (extracted by dataset_manager)
+        runs = data
+        trajectory_key = "trajectory"
+        problem_doc_key = "target_expression"
         final_mse_key = "final_mse"
         run_id_key = "run_id"
+        is_flat_format = True
     else:
-        # New format: data[problem_name] = [runs...]
+        # Legacy format: data[problem_name] = [runs...]
         trajectories_dict = data
         trajectory_key = "trajectory"
         problem_doc_key = "problem_description"
         final_mse_key = "final_mse"
         run_id_key = "run_number"
 
-    for problem_name, runs in trajectories_dict.items():
-        for run in runs:
-            # Handle different metadata structures
-            if "metadata" in run:
-                # New format: metadata is separate
-                metadata = run["metadata"]
-                trajectory_data = run[trajectory_key]
-                run_id = metadata.get(run_id_key, 0)
-            else:
-                # Old format: everything is at top level
-                trajectory_data = run[trajectory_key]
-                run_id = run.get(run_id_key, 0)
+        # Process each problem separately
+        problem_runs = []
+        for problem_name, runs_list in trajectories_dict.items():
+            problem_runs.extend([(problem_name, run) for run in runs_list])
+        runs = problem_runs
+        is_flat_format = False
 
-            # Skip if trajectory doesn't have new format with full population data
-            if not trajectory_data or "expressions" not in trajectory_data[0]:
-                continue
+    # Process runs based on format
+    def process_run(run, problem_name):
+        # Handle different metadata structures
+        if "metadata" in run:
+            # New format: metadata is separate
+            metadata = run["metadata"]
+            trajectory_data = run[trajectory_key]
+            run_id = metadata.get(run_id_key, 0)
+        else:
+            # Old format: everything is at top level
+            trajectory_data = run[trajectory_key]
+            run_id = run.get(run_id_key, 0)
 
-            # Extract variables, operators, constants from this trajectory
-            variables, operators, constants = extract_variables_operators_constants(trajectory_data)
+        # Skip if trajectory doesn't have new format with full population data
+        if not trajectory_data or "expressions" not in trajectory_data[0]:
+            return
 
-            # Compute data statistics for rich context if needed
-            data_stats = None
-            if context_type in ['rich', 'superrich'] and data_context and problem_name in data_context:
-                problem_data = data_context[problem_name]
-                X, y = problem_data['X'], problem_data['y']
-                data_stats = compute_data_statistics(X, y)
-                
-                # Add text plot for superrich context
-                if context_type == 'superrich':
-                    from format_utils import create_text_plot
-                    data_stats['text_plot'] = create_text_plot(X, y)
+        # Extract variables, operators, constants from this trajectory
+        variables, operators, constants = extract_variables_operators_constants(trajectory_data)
 
-            # Create one training example for each generation transition
-            for i in range(len(trajectory_data) - 1):
-                # Create context header using shared formatting with context type and current generation
-                context_header = format_context(i, variables, operators, constants, context_type, data_stats)
-                current_gen = trajectory_data[i]
-                next_gen = trajectory_data[i + 1]
+        # Compute data statistics for rich context if needed
+        data_stats = None
+        if context_type in ['rich', 'superrich'] and data_context and problem_name in data_context:
+            problem_data = data_context[problem_name]
+            X, y = problem_data['X'], problem_data['y']
+            data_stats = compute_data_statistics(X, y)
 
-                # Format current generation population using shared formatting
-                current_expressions = current_gen["expressions"]
+            # Add text plot for superrich context
+            if context_type == 'superrich':
+                from format_utils import create_text_plot
+                data_stats['text_plot'] = create_text_plot(X, y)
+
+        # Create one training example for each generation transition
+        for i in range(len(trajectory_data) - 1):
+            # Create context header using shared formatting with context type and current generation
+            context_header = format_context(i, variables, operators, constants, context_type, data_stats)
+            current_gen = trajectory_data[i]
+            next_gen = trajectory_data[i + 1]
+
+            # Format current generation population using shared formatting
+            current_expressions = current_gen["expressions"]
+            # Handle cases where fitnesses are not present (simplified training format)
+            if "fitnesses" in current_gen:
                 current_fitnesses = current_gen["fitnesses"]
-                population_line = format_population_with_fitness(current_expressions, current_fitnesses)
+            else:
+                # Use dummy fitnesses for format compatibility (not used in training)
+                current_fitnesses = [-1.0] * len(current_expressions)
+            population_line = format_population_with_fitness(current_expressions, current_fitnesses)
 
-                # Get target expressions for next generation
-                target_expressions = next_gen["expressions"]
+            # Get target expressions for next generation
+            target_expressions = next_gen["expressions"]
 
-                # Create one training example for each target expression
-                for j, target in enumerate(target_expressions):
-                    example = {
-                        "context": context_header,
-                        "population": population_line,
-                        "target": target,
-                        "metadata": {
-                            "problem": problem_name,
-                            "generation": current_gen["generation"],
-                            "run_id": run_id,
-                            "target_index": j
-                        }
+            # Create one training example for each target expression
+            for j, target in enumerate(target_expressions):
+                example = {
+                    "context": context_header,
+                    "population": population_line,
+                    "target": target,
+                    "metadata": {
+                        "problem": problem_name,
+                        "generation": current_gen["generation"],
+                        "run_id": run_id,
+                        "target_index": j
                     }
-                    converted_data.append(example)
+                }
+                converted_data.append(example)
+
+    # Handle different formats for iteration
+    if is_flat_format:
+        # Flat format without problem names
+        for run in runs:
+            process_run(run, "training_data")
+    else:
+        # Format with problem names
+        for problem_name, run in runs:
+            process_run(run, problem_name)
 
     # Save converted data
     with open(output_file, 'w') as f:

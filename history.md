@@ -1,3 +1,43 @@
+## Cleaned Up Training Data Format (9/15/2025)
+
+Removed unnecessary fields from training data to reduce file size and focus on essential information:
+
+### Changes Made:
+1. **Removed `fitnesses` array**: The individual fitness values for each expression in a generation are no longer stored in training data
+2. **Removed `avg_fitness`**: Average fitness per generation is no longer computed or stored
+3. **Kept essential fields**: Retained `best_fitness`, `best_expression`, `expressions`, `population_diversity` for analysis
+4. **Preserved analysis capability**: BasicSR still computes fitnesses internally for analysis but filters them out when creating training datasets
+
+### Implementation:
+- Modified `generate_traces.py` to filter out `fitnesses` and `avg_fitness` when creating training datasets
+- Updated `convert_trajectories.py` to handle missing fitnesses gracefully with dummy values
+- Kept full fitness computation in `basic_sr.py` for runtime analysis and debugging
+
+This reduces training file sizes significantly while preserving all information needed for neural model training.
+
+## Updated Training Data Generation API (9/15/2025)
+
+Updated the training data generation system to use simplified JSON formats as requested:
+
+### Changes Made:
+1. **Expressions format**: Changed from full objects with metadata to simple array of expression strings
+   - Before: `{"expressions": [{"id": 0, "expression": "x+1", "variables": ["x0"], ...}, ...]}`
+   - After: `{"expressions": ["x+1", "x*2", "x**2"]}`
+
+2. **Traces format**: Changed from nested object structure to flat array
+   - Before: `{"trajectories": {"expr_0": [trajectory_data], "expr_1": [...]}}`
+   - After: `{"trajectories": [trajectory_data1, trajectory_data2, ...]}`
+
+3. **Updated processing pipeline**: Modified `convert_trajectories.py` to handle the new flat array formats, including support for raw arrays extracted by dataset_manager.
+
+4. **Verified end-to-end**: Successfully tested complete pipeline generating expressions → traces → training dataset with new formats.
+
+### Files Updated:
+- `generate_expressions.py`: Simplified expression output format
+- `generate_traces.py`: Updated traces output to flat array, modified expression loading
+- `training/convert_trajectories.py`: Added support for new flat array format detection and processing
+- `dataset_manager.py`: Works correctly with new formats
+
 ## Implemented Training Data Generation System (9/12/2025)
 
 Successfully implemented a complete training data generation system with three main components:

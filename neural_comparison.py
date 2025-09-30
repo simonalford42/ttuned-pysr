@@ -119,7 +119,8 @@ def main():
         args.checkpoint,
         args.problem,
         collect_trajectories=args.collect_trajectories,
-        save_trajectories=args.save_trajectories
+        save_trajectories=args.save_trajectories,
+        num_generations=10000,
     )
     if result:
         print("\n✓ Comparison completed successfully!")

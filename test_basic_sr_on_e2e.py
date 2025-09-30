@@ -34,11 +34,10 @@ def main(n: int = 10, seed: int = 0):
         "env_base_seed": seed,
         "use_controller": False,
         # Restrict to add/sub/mul only and target low complexity
-        "allowed_binary_operators": ["add", "sub", "mul"],
-        # No specific unary requirement; ensure no unaries are kept by complexity + explicit cap
-        "complexity": 0.5,
-        "min_unary_ops": 0,
-        "max_unary_ops": 0,
+        "allowed_binary_operators": "add,sub,mul",
+        # "allowed_unary_operators": "abs,sqrt,tan,inv,sin,cos",
+        "allowed_unary_operators": "",
+        "complexity": 0.3,
     })
 
     # Iterate over expressions
@@ -83,7 +82,9 @@ def main(n: int = 10, seed: int = 0):
             early_stop_threshold=3e-16,
             min_generations=2,
             binary_operators=['+', '-', '*'],
+            # unary_operators=['abs', 'sqrt', 'cos', 'sin', 'inv', 'tan'],
             unary_operators=[],
+            record_heritage=True,
         )
 
         model.fit(X, y, verbose=True)
@@ -91,6 +92,10 @@ def main(n: int = 10, seed: int = 0):
         mse = float(np.mean((y - y_pred) ** 2))
         print(f"    Best MSE={mse:.3e}; Best Expr={model.best_model_}")
 
+        # print out the heritage
+        heritage = model.retrieve_heritage_of_best_expression()
+        print([len(g) for g in heritage])
+
 
 if __name__ == "__main__":
-    main()
+    main(n=10, seed=1)
