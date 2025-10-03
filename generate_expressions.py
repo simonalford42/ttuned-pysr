@@ -1,186 +1,180 @@
 """
-Generate synthetic expressions for training data.
-Provides both legacy polynomial generation and a new
-operator-aware, size-controlled generator using SymPy.
+Generate synthetic expressions for training data using e2e_data_gen.
+This module now wraps E2EDataGenerator to create expression datasets
+with configurable operators and complexity levels.
 """
 import numpy as np
 import json
+import pickle
+import gzip
 import os
 from datetime import datetime
-import random
 from typing import List, Dict, Any, Optional
-import sympy as sp
+from e2e_data_gen import E2EDataGenerator
 
 
-def generate_simple_polynomials(n_expressions: int, max_degree: int = 3,
-                               max_vars: int = 2, constants: List[float] = [1.0, 2.0],
-                               seed: int = 42) -> List[Dict[str, Any]]:
-    """Generate simple polynomial expressions"""
-    random.seed(seed)
+def generate_e2e_expressions(
+    n_expressions: int = 100,
+    binary_ops: str = "add,sub,mul",
+    unary_ops: str = "",
+    complexity: float = 0.5,
+    n_input_points: int = 64,
+    seed: int = 42
+) -> List[Dict[str, Any]]:
+    """
+    Generate expressions using E2EDataGenerator.
+
+    Args:
+        n_expressions: Number of expressions to generate
+        binary_ops: Comma-separated binary operators (e.g., "add,sub,mul")
+        unary_ops: Comma-separated unary operators (e.g., "abs,sqrt,sin,cos,tan,inv")
+        complexity: Target complexity for expression generation (0.0 to 1.0)
+        n_input_points: Number of data points to generate per expression
+        seed: Random seed
+
+    Returns:
+        List of expression dicts with id, expression, X_data, y_data, metadata
+    """
     np.random.seed(seed)
+
+    # Build e2e generator
+    gen = E2EDataGenerator(env_overrides={
+        "env_base_seed": seed,
+        "use_controller": False,
+        "allowed_binary_operators": binary_ops,
+        "allowed_unary_operators": unary_ops,
+        "complexity": complexity,
+    })
 
     expressions = []
 
-    # Variable names
-    var_names = [f'x{i}' for i in range(max_vars)]
-
     for i in range(n_expressions):
-        # Random degree and number of variables for this expression
-        degree = random.randint(1, max_degree)
-        n_vars = random.randint(1, max_vars)
-        selected_vars = var_names[:n_vars]
+        # Generate expression with data
+        sample = gen.generate_expression(train=True)
+        expr_str = sample["expr_str"]
+        tree = sample["tree"]
 
-        # Generate polynomial terms
-        terms = []
-        n_terms = random.randint(1, min(5, 2**n_vars))  # Limit complexity
+        # Get data
+        X_list = sample.get("X_to_fit", [])
+        Y_list = sample.get("Y_to_fit", [])
 
-        for _ in range(n_terms):
-            # Create a term
-            coeff = random.choice(constants + [-1.0])  # Include negative
-            var_powers = {}
-
-            # Assign powers to variables
-            for var in selected_vars:
-                if random.random() < 0.7:  # Not all vars in every term
-                    power = random.randint(0, degree)
-                    if power > 0:
-                        var_powers[var] = power
-
-            # Build term string
-            if not var_powers:  # Constant term
-                # Always render numeric coefficient (avoid bare '-')
-                term = str(coeff) if coeff != 1 else "1.0"
-            else:
-                term_parts = []
-                if coeff != 1.0:
-                    # Use numeric literal for negatives to avoid strings like '- * x0'
-                    term_parts.append(str(coeff))  # e.g., '-1.0'
-
-                for var, power in var_powers.items():
-                    if power == 1:
-                        term_parts.append(var)
-                    else:
-                        term_parts.append(f"({var}**{power})")
-
-                term = " * ".join(term_parts) if term_parts else "1.0"
-
-            terms.append(term)
-
-        # Combine terms
-        if len(terms) == 1:
-            expr_str = terms[0]
+        if X_list and Y_list:
+            X = X_list[0]
+            Y = Y_list[0]
         else:
-            expr_str = " + ".join(f"({term})" for term in terms)
+            # Generate fresh data if not provided
+            data = gen.generate_data_for_tree(tree=tree, n_input_points=n_input_points)
+            X, Y = data["fit"]
 
-        # Ensure expression is not purely-constant (helps avoid trivial traces)
-        if 'x' not in expr_str:
-            # Guarantee at least one variable term
-            first_var = selected_vars[0]
-            expr_str = f"({expr_str}) + {first_var}"
+        # Flatten Y to 1-D if needed
+        Y = np.asarray(Y)
+        if Y.ndim == 2 and Y.shape[1] == 1:
+            y = Y[:, 0]
+        elif Y.ndim == 1:
+            y = Y
+        else:
+            y = Y[:, 0]
 
-        # Create data generation function
-        def create_data_func(expr_str=expr_str, n_vars=n_vars):
-            def data_func(seed):
-                rstate = np.random.RandomState(seed)
-                X = rstate.uniform(-3, 3, size=(50, n_vars))
-
-                # Evaluate expression safely
-                try:
-                    # Build evaluation context
-                    context = {}
-                    for j in range(n_vars):
-                        context[f'x{j}'] = X[:, j]
-
-                    # Evaluate expression
-                    y = eval(expr_str, {"__builtins__": {}}, context)
-                    return X, np.array(y)
-                except:
-                    # Fallback to simple expression if evaluation fails
-                    return X, X[:, 0] ** 2
-
-            return data_func
-
+        # Store expression with data (keep as numpy arrays for efficient pickle storage)
         expressions.append({
             'id': i,
             'expression': expr_str,
-            'variables': selected_vars,
-            'degree': degree,
-            'data_func': create_data_func(),
-            'description': f"Polynomial: {expr_str}"
+            'X_data': X.astype(np.float32),  # Use float32 for smaller size
+            'y_data': y.astype(np.float32),
         })
 
     return expressions
 
 
 def save_expressions(expressions: List[Dict], output_file: str, metadata: Dict):
-    """Save expressions to file with metadata"""
+    """Save expressions with X/y data to file with metadata using compressed pickle format"""
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
-
-    # Extract just the expression strings for the simplified format
-    expression_strings = [expr['expression'] for expr in expressions]
 
     data = {
         'metadata': metadata,
-        'expressions': expression_strings
+        'expressions': expressions  # Now includes X_data, y_data, and per-expression metadata
     }
 
-    with open(output_file, 'w') as f:
-        json.dump(data, f, indent=2)
+    # Use gzipped pickle for ~9x compression vs JSON
+    with gzip.open(output_file, 'wb') as f:
+        pickle.dump(data, f, protocol=pickle.HIGHEST_PROTOCOL)
 
-    print(f"Saved {len(expressions)} expressions to {output_file}")
-    return expression_strings
+    file_size_mb = os.path.getsize(output_file) / (1024 * 1024)
+    print(f"Saved {len(expressions)} expressions to {output_file} ({file_size_mb:.2f} MB)")
+    return expressions
 
 
 def generate_training_expressions(n_expressions: int = 100,
-                                 max_degree: int = 3,
-                                 max_vars: int = 2,
-                                 constants: List[float] = [1.0, 2.0],
+                                 binary_ops: str = "add,sub,mul",
+                                 unary_ops: str = "",
+                                 complexity: float = 0.5,
+                                 n_input_points: int = 64,
                                  seed: int = 42,
                                  output_dir: str = "datasets/expressions") -> str:
-    """Generate training expressions and save to file"""
+    """Generate training expressions with data and save to file"""
 
     print(f"Generating {n_expressions} training expressions...")
-    print(f"Parameters: max_degree={max_degree}, max_vars={max_vars}")
-    print(f"Constants: {constants}")
+    print(f"Parameters: binary_ops={binary_ops}, unary_ops={unary_ops or 'none'}, complexity={complexity}")
+    print(f"Data points per expression: {n_input_points}")
 
     # Generate expressions
-    expressions = generate_simple_polynomials(
+    expressions = generate_e2e_expressions(
         n_expressions=n_expressions,
-        max_degree=max_degree,
-        max_vars=max_vars,
-        constants=constants,
+        binary_ops=binary_ops,
+        unary_ops=unary_ops,
+        complexity=complexity,
+        n_input_points=n_input_points,
         seed=seed
     )
 
     # Create metadata
     metadata = {
-        'generation_command': f"python generate_expressions.py --n_expressions={n_expressions} --max_degree={max_degree} --max_vars={max_vars} --seed={seed}",
+        'generation_command': f"python generate_expressions.py --n_expressions={n_expressions} --binary_ops={binary_ops} --unary_ops={unary_ops} --complexity={complexity} --n_input_points={n_input_points} --seed={seed}",
         'timestamp': datetime.now().isoformat(),
         'parameters': {
             'n_expressions': n_expressions,
-            'max_degree': max_degree,
-            'max_vars': max_vars,
-            'constants': constants,
+            'binary_ops': binary_ops,
+            'unary_ops': unary_ops,
+            'complexity': complexity,
+            'n_input_points': n_input_points,
             'seed': seed
         },
-        'generator_version': '1.0'
+        'generator_version': '2.0-e2e'
     }
 
-    # Generate output filename
+    # Generate descriptive filename
+    # Size: 1k, 10k, 100k, 1M, etc.
+    if n_expressions >= 1_000_000:
+        size_str = f"{n_expressions // 1_000_000}M"
+    elif n_expressions >= 1_000:
+        size_str = f"{n_expressions // 1_000}k"
+    else:
+        size_str = str(n_expressions)
+
+    # Operators: use readable names
+    # Either basic arithmetic (add,sub,mul) or full ops (add,sub,mul,div,pow + unary)
+    if unary_ops:
+        ops_str = "full"
+    else:
+        ops_str = "arith"
+
+    # Complexity: c05, c10, etc.
+    complexity_str = f"c{int(complexity * 10):02d}"
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{output_dir}/train_expressions_{timestamp}.json"
+    filename = f"{output_dir}/train_{size_str}_{ops_str}_{complexity_str}_{timestamp}.pkl.gz"
 
     # Save expressions
     save_expressions(expressions, filename, metadata)
 
-    print(f"✓ Generated {len(expressions)} expressions")
+    print(f"✓ Generated {len(expressions)} expressions with data")
     print(f"✓ Saved to {filename}")
 
     return filename
 
 
-# New operator-aware expression generator
-def generate_expressions(
+# Kept for backward compatibility - old sympy-based generator (legacy)
+def generate_expressions_legacy(
     n_expressions: int = 100,
     max_size: int = 30,
     min_size: int = 5,
@@ -418,9 +412,10 @@ def create_test_expressions(n_expressions: int = 10,
 
     return generate_training_expressions(
         n_expressions=n_expressions,
-        max_degree=2,  # Simpler for testing
-        max_vars=2,
-        constants=[1.0, 2.0],
+        binary_ops="add,sub,mul",
+        unary_ops="",
+        complexity=0.3,
+        n_input_points=64,
         seed=seed,
         output_dir=output_dir
     )
@@ -429,10 +424,12 @@ def create_test_expressions(n_expressions: int = 10,
 if __name__ == "__main__":
     import argparse
 
-    parser = argparse.ArgumentParser(description="Generate synthetic expressions")
+    parser = argparse.ArgumentParser(description="Generate synthetic expressions using e2e")
     parser.add_argument("--n_expressions", type=int, default=100, help="Number of expressions to generate")
-    parser.add_argument("--max_degree", type=int, default=3, help="Maximum polynomial degree")
-    parser.add_argument("--max_vars", type=int, default=2, help="Maximum number of variables")
+    parser.add_argument("--binary_ops", type=str, default="add,sub,mul", help="Comma-separated binary operators (e.g., add,sub,mul,div,pow)")
+    parser.add_argument("--unary_ops", type=str, default="", help="Comma-separated unary operators (e.g., abs,sqrt,sin,cos,tan,inv)")
+    parser.add_argument("--complexity", type=float, default=0.5, help="Complexity level (0.0 to 1.0)")
+    parser.add_argument("--n_input_points", type=int, default=64, help="Number of data points per expression")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--output_dir", default="datasets/expressions", help="Output directory")
     parser.add_argument("--test", action="store_true", help="Generate small test set")
@@ -443,8 +440,13 @@ if __name__ == "__main__":
         filename = create_test_expressions(args.n_expressions, args.seed, args.output_dir)
     else:
         filename = generate_training_expressions(
-            args.n_expressions, args.max_degree, args.max_vars,
-            [1.0, 2.0], args.seed, args.output_dir
+            n_expressions=args.n_expressions,
+            binary_ops=args.binary_ops,
+            unary_ops=args.unary_ops,
+            complexity=args.complexity,
+            n_input_points=args.n_input_points,
+            seed=args.seed,
+            output_dir=args.output_dir
         )
 
     print(f"\n✓ Expression generation complete: {filename}")
