@@ -50,4 +50,5 @@ data/
 out/
 training/checkpoints/
 wandb/
+datasets/
 
