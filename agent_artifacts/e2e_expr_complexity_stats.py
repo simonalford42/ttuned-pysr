@@ -25,7 +25,9 @@ def _ensure_e2e_on_path():
 
 _ensure_e2e_on_path()
 
-from e2e_data_gen import E2EDataGenerator  # noqa: E402
+# Import from main codebase (parent directory)
+sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
+from generate_expressions import E2EDataGenerator  # noqa: E402
 from symbolicregression.envs.generators import Node, NodeList  # noqa: E402
 
 

@@ -1,56 +1,59 @@
 #!/bin/bash
 
-# 10/2 - Generate 1M expression datasets for each config
-# Estimated time: ~40 minutes each, ~2.7 GB per dataset
+# 10/6/26
+# sbatch -J tiny --partition ellis run.sh python -u training/train_one_step.py --config training/configs/onestep-tiny.json
 
-# Config 1: add,sub,mul with complexity 0.5
-sbatch -J dg_asm05 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=1000000 --binary_ops=add,sub,mul --unary_ops= --complexity=0.5 --seed=42
+# sbatch -J dg_asm05 --partition ellis run.sh python generate_expressions.py --n_expressions=1000 --binary_ops=add,sub,mul --unary_ops= --complexity=0.5 --seed=42 --constants=1.0
+# sbatch -J dg_asm10 --partition ellis run.sh python generate_expressions.py --n_expressions=1000 --binary_ops=add,sub,mul --unary_ops= --complexity=1.0 --seed=43 --constants=1.0
+# sbatch -J dg_all03 --partition ellis run.sh python generate_expressions.py --n_expressions=1000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.3 --seed=44 --constants=1.0
+# sbatch -J dg_all06 --partition ellis run.sh python generate_expressions.py --n_expressions=1000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.6 --seed=45 --constants=1.0
+# sbatch -J dg_all10 --partition ellis run.sh python generate_expressions.py --n_expressions=1000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=1.0 --seed=46 --constants=1.0
 
-# Config 2: add,sub,mul with complexity 1.0
-sbatch -J dg_asm10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=1000000 --binary_ops=add,sub,mul --unary_ops= --complexity=1.0 --seed=43
+# submit trace-generation jobs for a list of expression files and generation counts
+# NUM_GENERATIONS=(1000 10000) # add more values if needed, e.g. (1000 10000)
+NUM_GENERATIONS=(1000 10000)
+FILES=(
+    "arith_1k_c05_20251003_135753.pkl.gz"
+    "arith_1k_c10_20251003_135910.pkl.gz"
+    "full_1k_c03_20251003_135908.pkl.gz"
+    "full_1k_c06_20251003_135909.pkl.gz"
+    "full_1k_c10_20251003_135911.pkl.gz"
+)
 
-# Config 3: all operators with complexity 0.3
-sbatch -J dg_all03 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=1000000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.3 --seed=44
+for num_generations in "${NUM_GENERATIONS[@]}"; do
+    for filename in "${FILES[@]}"; do
+        expr_path="datasets/expressions/${filename}"
 
-# Config 4: all operators with complexity 0.6
-sbatch -J dg_all06 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=1000000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.6 --seed=45
+        if [[ ! -f "$expr_path" ]]; then
+            echo "Warning: expressions file not found: $expr_path" >&2
+            continue
+        fi
 
-# Config 5: all operators with complexity 1.0
-sbatch -J dg_all10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=1000000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=1.0 --seed=46
+        # make a safe job name from the filename (remove extension, replace non-alnum with _)
+        base="${filename%%.*}"
+        jobname="${base}_${num_generations}"
+    jobname="${jobname//[^a-zA-Z0-9_-]/_}"
+        # either 'full' or 'arith'; get the substring before the first underscore
+        operators="${base%%_*}"
+        sbatch -J "$jobname" run.sh python -u generate_traces.py --expressions_file="$expr_path" --num_generations="$num_generations" --create_one_step --operator_set="$operators"
+    done
+done
 
-# Config 1: add,sub,mul with complexity 0.5
-sbatch -J dg_asm05 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=100000 --binary_ops=add,sub,mul --unary_ops= --complexity=0.5 --seed=42
-
-# Config 2: add,sub,mul with complexity 1.0
-sbatch -J dg_asm10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=100000 --binary_ops=add,sub,mul --unary_ops= --complexity=1.0 --seed=43
-
-# Config 3: all operators with complexity 0.3
-sbatch -J dg_all03 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=100000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.3 --seed=44
-
-# Config 4: all operators with complexity 0.6
-sbatch -J dg_all06 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=100000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.6 --seed=45
-
-# Config 5: all operators with complexity 1.0
-sbatch -J dg_all10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=100000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=1.0 --seed=46
+# 10/2 - 10k expression datasets (archived - using 1k instead)
+# sbatch -J dg_asm05 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=10000 --binary_ops=add,sub,mul --unary_ops= --complexity=0.5 --seed=42 --constants=1.0
+# sbatch -J dg_asm10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=10000 --binary_ops=add,sub,mul --unary_ops= --complexity=1.0 --seed=43 --constants=1.0
+# sbatch -J dg_all03 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=10000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.3 --seed=44 --constants=1.0
+# sbatch -J dg_all06 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=10000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=0.6 --seed=45 --constants=1.0
+# sbatch -J dg_all10 --partition ellis run_datagen.sh generate_large_dataset.py --n_expressions=10000 --binary_ops=add,sub,mul,div,pow --unary_ops=abs,sqrt,sin,cos,tan,inv --complexity=1.0 --seed=46 --constants=1.0
 
 # 9/9 - Overfitting test with tiny pythagorean dataset
 # sbatch -J ft --partition ellis run2.sh python -u training/train_one_step.py --config training/configs/onestep-tiny-overfit.json
 
-# 8/26
+# 8/26 - Training experiments
 # sbatch -J ft --partition ellis run2.sh python -u training/train_one_step.py --config training/configs/onestep-tiny.json
 # sbatch -J ft --partition ellis run2.sh python -u training/train_one_step.py --config training/onestep-tiny-debug.json
 # sbatch -J ft --partition ellis run2.sh python -u training/train_one_step.py --config training/onestep-tiny.json --resume --ckpt training/checkpoints/onestep-full_20250811_145316/checkpoint-75000
 
 # 8/20
 # sbatch -J ttsr2 --partition ellis run2.sh accelerate launch --config_file training/accelerate.yaml training/train_one_step.py --config training/onestep-s.json
-
-# 8/13
-# sbatch -J ttsr2 --partition ellis run2.sh
-# sbatch -J ttsr2 --partition ellis run2.sh training/train_one_step.py --config training/onestep-s.json
-
-# 8/12/25
-# sbatch -J ttsr --partition ellis run.sh training/train_one_step.py --config training/onestep-s.json
-
-# 8/11/25
-# sbatch -J ttsr --partition ellis run.sh training/train_one_step.py --config training/onestep-config.json
 

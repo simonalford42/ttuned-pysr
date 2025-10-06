@@ -1,20 +1,22 @@
 #!/bin/bash
 
- # job name
-#SBATCH -J ttsr
- # output file (%j expands to jobID)
+# job name
+#SBATCH -J ttsr2
 #SBATCH -o out/%A.out
- # total nodes
+# total nodes
 #SBATCH -N 1
- # total cores
+# total tasks
 #SBATCH -n 1
+# cpus per task
+#SBATCH --cpus-per-task=1
 #SBATCH --requeue
-#SBATCH --mem=50G
-#SBATCH --gres=gpu:1
-#SBATCH --partition=ellis
-#SBATCH --time=24:00:00
+#SBATCH --mem-per-cpu=50G
+# disable #SBATCH --gres=gpu:nvidia_rtx_a6000:1
+# disable #SBATCH --partition=ellis
+#SBATCH --partition=default_partition
+#SBATCH --time=72:00:00
 
 source /home/sca63/mambaforge/etc/profile.d/conda.sh
 conda activate ttsr
 
-python -u "$@"
+"$@"

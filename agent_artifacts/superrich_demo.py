@@ -6,7 +6,7 @@ Generates ASCII plots and superrich context strings for simple functions:
 - y = sin(x) on x in [-pi, pi]
 """
 import numpy as np
-from training.format_utils import (
+from format_utils import (
     compute_data_statistics,
     create_text_plot,
     format_context,

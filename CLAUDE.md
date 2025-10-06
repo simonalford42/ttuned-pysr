@@ -1,3 +1,3 @@
-- Whenever completing a high level step, append a summary of what you did to history.md.
+- Whenever completing a high level step, append a summary of what you did to agent_artifacts/history.md.
+- I know you like to make lots of small scripts for things, markdown files for results, etc. I have a folder "agent_artifacts" for storing those files when they are not core parts of the codebase and more testing/documenting intermediate steps. I might ask you to move files there when I'm done with them.
 - Always add default arguments to scripts so we can remember how data was created
-- When debugging training scripts, look to the stream-of-search repo to see how it was done there, because it worked in that repo, and whatever problem we face we should fix by doing what they did (we probably just didn't fully copy/translate over the code properly).

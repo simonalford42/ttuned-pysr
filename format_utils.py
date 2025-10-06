@@ -6,12 +6,12 @@ import numpy as np
 from typing import Optional, Dict, Any
 
 
-def format_context(generation, variables, operators, constants, context_type='basic', data_stats=None):
+def format_context(generation, num_variables, operators, constants, context_type='basic', data_stats=None):
     """Format context string for neural model input with different context levels
 
     Args:
         generation: Current generation number for the context
-        variables: List of variable names (e.g., ['x0', 'x1'])
+        num_variables: number of variables
         operators: List of operators (e.g., ['+', '-', '*', '/'])
         constants: List of constants (e.g., [1.0, 2.0])
         context_type: 'basic', 'rich', or 'superrich'
@@ -20,11 +20,11 @@ def format_context(generation, variables, operators, constants, context_type='ba
     Returns:
         Formatted context string
     """
-    var_str = ",".join(variables)
+    var_str = f"{num_variables} variables"
     op_str = ",".join(operators)
     const_str = ",".join([str(c) for c in constants])
 
-    basic_context = f"generation: {generation} | variables: {var_str} | ops: {op_str} | constants: {const_str}"
+    basic_context = f"generation: {generation} | {var_str} | ops: {op_str} | constants: {const_str}"
 
     if context_type == 'basic':
         return basic_context

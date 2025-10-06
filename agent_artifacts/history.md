@@ -1,3 +1,84 @@
+## Set Up SLURM Jobs for Trace Generation (10/3/2025)
+
+Added automated trace generation pipeline for SLURM:
+
+### New files:
+1. **`run_tracegen.sh`**: SLURM script for trace generation jobs
+   - 32GB memory, 12-hour time limit
+   - Suitable for long-running trace generation
+
+2. **`generate_traces_batch.py`**: CLI wrapper for batch trace generation
+   - Command-line interface for all trace generation parameters
+   - Works with SLURM job submission
+
+### Updated `submit_jobs.sh`:
+Added trace generation jobs for all 5 configs with 1k and 10k generations:
+- **1k generation traces**: ~2-4 hours each, suitable for initial experiments
+- **10k generation traces**: ~20-40 hours each, for deeper learning
+
+Job naming convention: `tg1k_asm05` (trace gen, 1k generations, arith+simple, complexity 0.5)
+
+Output files will be: `gen1k_train_1k_arith_c05.pkl.gz`, etc.
+
+All trace jobs are commented out by default - uncomment to submit.
+
+## Optimized Trace Dataset Storage (10/3/2025)
+
+Updated `generate_traces.py` to use same storage optimizations as `generate_expressions.py`:
+
+### Changes:
+1. **Switched to gzipped pickle format** (`.pkl.gz` instead of `.json`):
+   - ~9x compression vs JSON
+   - Faster loading/saving
+   - Native numpy array support
+
+2. **Use float32 for fitness arrays**:
+   - 50% smaller than float64
+   - Sufficient precision for fitness values
+
+3. **Keep fitnesses as numpy arrays**:
+   - More efficient than Python lists
+   - Easier analysis and manipulation
+
+4. **Improved filename format**: `gen{N}_{expression_filename}.pkl.gz`
+   - Example: `gen10_train_100_arith_c05.pkl.gz` (10 generations)
+   - Example: `gen1k_train_100_arith_c05.pkl.gz` (1000 generations)
+   - Makes it easy to identify trace generation parameters
+   - Preserves connection to source expression dataset
+
+5. **Updated inspect_dataset.py**:
+   - Now supports both expression and trace datasets
+   - Auto-detects dataset type
+   - Shows relevant stats for each type
+
+6. **Updated training/convert_trajectories.py**:
+   - Now supports both `.pkl.gz` and `.json` trace files
+   - Handles numpy arrays in fitnesses
+   - Works with new flattened trajectory format
+
+### Storage improvements:
+- Trace datasets now significantly smaller
+- Faster to load and process
+- Consistent format across expression and trace datasets
+- Full backward compatibility with old JSON format
+
+## Fixed Constants Generation in generate_expressions.py (10/3/2025)
+
+Fixed bug where constants were not being generated in expressions despite being specified:
+
+### Problem:
+1. **Type mismatch**: `extra_constants` was passed as a list instead of comma-separated string
+2. **Missing probability**: `prob_const` was not set, defaulting to 0.0 (no constants generated)
+
+### Solution:
+- Convert constants list to comma-separated string: `",".join(str(c) for c in constants)`
+- Set `prob_const = 0.2` when constants are specified (20% probability of generating constant in leaf positions)
+
+### Result:
+Now `--constants="1.0,2.5,3.14"` correctly generates expressions like:
+- `((x_1 mul x_4) mul 3.14)`
+- `(x_2 sub (2.5 sub x_2))`
+
 ## Cleaned Up Training Data Format (9/15/2025)
 
 Removed unnecessary fields from training data to reduce file size and focus on essential information:
@@ -246,3 +327,99 @@ The system is now ready to collect comprehensive evolutionary trajectory data fo
   - convert_trajectories.py: Updated to use loop index (generation number) when creating context
   - fine_grained_comparison.py: Updated to pass correct generation numbers
 - This allows the neural model to understand which generation it's working on during training and inference
+
+## 2025-10-03: Constants Support and Metadata Optimization
+
+### Changes Made
+
+**1. Added constants parameter to BasicSR** (`basic_sr.py`)
+- Added `constants` parameter to `__init__` (default: `[1.0, 2.0]`)
+- Modified `create_terminal()` to handle empty constants list (only creates variables when no constants available)
+
+**2. Enhanced generate_expressions.py with constants control**
+- Added `use_constants` parameter to `generate_e2e_expressions()` and `generate_training_expressions()`
+- Added `--no_constants` CLI flag to disable constant generation
+- When `use_constants=False`, sets `prob_const=0.0` in E2EDataGenerator
+- Stores `use_constants` flag in expression metadata
+
+**3. Updated generate_traces.py for automatic constant detection**
+- Added `constants` parameter (default: `[1.0, 2.0]`)
+- Added `--constants` CLI flag for custom constant list
+- Reads `use_constants` from expression metadata and automatically sets BasicSR constants:
+  - If expressions were generated without constants (`use_constants=False`), sets `constants=[]` for BasicSR
+  - If expressions have constants, uses provided/default constants
+- Stores operator configuration and constants in trace metadata:
+  - `binary_operators`, `unary_operators`, `constants` at top level
+  - Enables downstream tools to read configuration from metadata
+
+**4. Optimized convert_trajectories.py to read from metadata**
+- Now reads `binary_operators` and `constants` from trace file metadata instead of parsing every expression
+- Only extracts variables per-trajectory (since they vary by expression)
+- Falls back to parsing if metadata not available (backward compatibility)
+- Added `extract_variables_from_trajectory()` helper function in `format_utils.py`
+
+### Pipeline Integration
+
+The full pipeline now automatically handles constants:
+
+```bash
+# Generate expressions WITHOUT constants
+python generate_expressions.py --n_expressions 100 --no_constants
+
+# Generate traces (automatically detects no constants from metadata)
+python generate_traces.py --expressions_file datasets/expressions/train_*.pkl.gz --operator_set full
+
+# Convert to training format (reads ops/constants from metadata)
+python training/convert_trajectories.py --input datasets/traces/traces_*.json --output data/training.jsonl
+```
+
+The constants configuration flows through the entire pipeline via metadata:
+1. `generate_expressions.py` → stores `use_constants` in expression metadata
+2. `generate_traces.py` → reads from expression metadata, passes to BasicSR, stores in trace metadata  
+3. `convert_trajectories.py` → reads from trace metadata for efficient context formatting
+
+### Benefits
+- **Consistency**: BasicSR search space automatically matches the generated expressions
+- **Efficiency**: Avoids parsing every expression to extract operators/constants
+- **Flexibility**: Support both constant-free and constant-enabled workflows
+- **Backward compatible**: Falls back to parsing if metadata unavailable
+
+
+## 2025-10-03b: Changed Default Constants to [1.0]
+
+### Changes Made
+
+**Changed default constants from [1.0, 2.0] to [1.0] across the entire pipeline:**
+
+1. **basic_sr.py**: Default `constants=[1.0]`
+2. **generate_expressions.py**: 
+   - Changed parameter from `use_constants: bool` to `constants: List[float] = [1.0]`
+   - Changed CLI from `--no_constants` flag to `--constants` arg (default: "1.0")
+   - Empty string for no constants
+3. **generate_traces.py**: 
+   - Default `constants=[1.0]`  
+   - CLI `--constants` default changed to "1.0"
+   - Automatically reads constants from expression metadata and uses those if default not overridden
+4. **submit_jobs.sh**: All jobs now pass `--constants=1.0`
+
+### Rationale
+- Simplifies search space by using only one constant instead of two
+- Still allows flexibility via command line (can pass "1.0,2.0" or "" for no constants)
+- Automatic metadata propagation ensures consistency across pipeline
+
+### Usage Examples
+
+```bash
+# Generate with default (1.0)
+python generate_expressions.py --n_expressions 100
+
+# Generate with multiple constants
+python generate_expressions.py --n_expressions 100 --constants "1.0,2.0,3.0"
+
+# Generate with no constants
+python generate_expressions.py --n_expressions 100 --constants ""
+
+# Trace generation auto-detects constants from expression metadata
+python generate_traces.py --expressions_file datasets/expressions/train_*.pkl.gz
+```
+

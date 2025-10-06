@@ -1,16 +1,248 @@
+#!/usr/bin/env python3
 """
-Generate synthetic expressions for training data using e2e_data_gen.
-This module now wraps E2EDataGenerator to create expression datasets
-with configurable operators and complexity levels.
+Generate synthetic expressions for training data using the e2e environment.
+
+This module provides:
+- E2EDataGenerator: Thin wrapper over the e2e FunctionEnvironment for sampling expressions and data
+- Functions to generate and save expression datasets with configurable operators and complexity
+
+It mirrors the knobs used by the e2e generator (operators, complexity,
+dimensions, distributions, noise, etc.) by letting you override any of the
+underlying environment parameters on initialization, and per-call overrides for
+key sampling controls.
 """
 import numpy as np
 import json
 import pickle
 import gzip
 import os
+import sys
 from datetime import datetime
-from typing import List, Dict, Any, Optional
-from e2e_data_gen import E2EDataGenerator
+from typing import List, Dict, Any, Optional, Tuple, Union, Iterable
+
+
+def _ensure_e2e_on_path():
+    repo_dir = os.path.dirname(os.path.abspath(__file__))
+    e2e_dir = os.path.join(repo_dir, "e2e_sr")
+    if e2e_dir not in sys.path:
+        sys.path.insert(0, e2e_dir)
+
+
+_ensure_e2e_on_path()
+
+# Import e2e modules after path setup
+import parsers  # type: ignore
+from symbolicregression.envs import build_env  # type: ignore
+from symbolicregression.envs.generators import (
+    Node,
+    NodeList,
+    operators_real,
+    operators_extra,
+)  # type: ignore
+
+
+class E2EDataGenerator:
+    """
+    Thin wrapper over the e2e FunctionEnvironment for sampling expressions and data.
+
+    Override any environment parameter via kwargs at init. Common useful knobs include:
+    - operators_to_downsample, operators_to_not_repeat, required_operators
+    - allowed_unary_operators, allowed_binary_operators, disabled_operators
+    - extra_unary_operators, extra_binary_operators, extra_constants
+    - min_input_dimension, max_input_dimension, min_output_dimension, max_output_dimension
+    - min_binary_ops_per_dim, max_binary_ops_per_dim, min_unary_ops, max_unary_ops
+    - complexity (0..1) to scale overall ops counts
+    - use_sympy, use_abs, prob_const, prob_rand, max_int, max_len, min_len_per_dim
+    - max_centroids, prediction_sigmas, max_trials, n_prediction_points
+    - train_noise_gamma, eval_noise_gamma, env_base_seed
+    """
+
+    def __init__(self, env_overrides: Optional[Dict[str, Any]] = None, seed: Optional[int] = None):
+        # Build default params, then apply overrides
+        self.params = parsers.get_parser().parse_args([])
+
+        # Preprocess convenience knobs in env_overrides before building env
+        allowed_unaries = None
+        allowed_binaries = None
+        disabled_ops = set()
+        complexity = None
+
+        if env_overrides:
+            # Extract convenience keys if present
+            def _coerce_list(x: Any) -> Optional[Iterable[str]]:
+                if x is None:
+                    return None
+                if isinstance(x, str):
+                    return [s.strip() for s in x.split(",") if s.strip()]
+                if isinstance(x, Iterable):
+                    return [str(s).strip() for s in x]
+                return None
+
+            if "allowed_unary_operators" in env_overrides:
+                allowed_unaries = _coerce_list(env_overrides.get("allowed_unary_operators"))
+                env_overrides.pop("allowed_unary_operators", None)
+            if "allowed_binary_operators" in env_overrides:
+                allowed_binaries = _coerce_list(env_overrides.get("allowed_binary_operators"))
+                env_overrides.pop("allowed_binary_operators", None)
+            if "disabled_operators" in env_overrides:
+                disabled_ops = set(_coerce_list(env_overrides.get("disabled_operators")) or [])
+                env_overrides.pop("disabled_operators", None)
+            if "complexity" in env_overrides:
+                complexity = float(env_overrides.get("complexity"))
+                env_overrides.pop("complexity", None)
+
+            # Apply remaining overrides directly onto argparse Namespace
+            for k, v in env_overrides.items():
+                if hasattr(self.params, k):
+                    setattr(self.params, k, v)
+                else:
+                    raise ValueError(f"Unknown environment parameter: {k}")
+
+        # Translate allowed_* and disabled_* into operators_to_downsample
+        if allowed_unaries is not None or allowed_binaries is not None or disabled_ops:
+            # Determine full sets
+            all_unaries = [o for o, a in operators_real.items() if abs(a) == 1]
+            all_binaries = [o for o, a in operators_real.items() if abs(a) == 2]
+            # include extras
+            all_binaries += [o for o, a in operators_extra.items() if abs(a) == 2]
+
+            zero_ops = set()
+            if allowed_unaries is not None:
+                zero_ops.update(set(all_unaries) - set(allowed_unaries))
+            if allowed_binaries is not None:
+                zero_ops.update(set(all_binaries) - set(allowed_binaries))
+            zero_ops.update(disabled_ops)
+
+            # Avoid zeroing all unaries to keep probability vector valid; we will still set max_unary_ops=0
+            # For safety, if zero_ops covers all unaries, drop one common unary from zeroing
+            if set(all_unaries).issubset(zero_ops) and len(all_unaries) > 0:
+                zero_ops.discard("sin")  # leave one with non-zero prob
+                self.params.max_unary_ops = 0 # user likely wants no unaries
+
+            downsample_pairs = [f"{op}_0" for op in sorted(zero_ops)]
+            self.params.operators_to_downsample = ",".join(downsample_pairs)
+
+        # Apply complexity scaling to ops counts if requested (0..1)
+        if complexity is not None:
+            c = max(0.0, min(1.0, float(complexity)))
+            # Scale binary ops per dim and offset (base defaults ~4)
+            base_cap = 4
+            scaled = max(1, int(round(c * base_cap)))
+            self.params.min_binary_ops_per_dim = 0
+            self.params.max_binary_ops_per_dim = scaled
+            self.params.max_binary_ops_offset = scaled
+            # Scale unary ops upper bound
+            self.params.min_unary_ops = getattr(self.params, "min_unary_ops", 0)
+            self.params.max_unary_ops = int(round(c * max(1, getattr(self.params, "max_unary_ops", 4))))
+
+        # Seed selection: prefer explicit seed argument, fallback to env_base_seed
+        base_seed = seed if seed is not None else (self.params.env_base_seed or 0)
+
+        # Build environment and RNG
+        self.env = build_env(self.params)
+        self.env.rng = np.random.RandomState(base_seed)
+
+    # ---------------------- Expression Generation ----------------------
+    def generate_expression(
+        self,
+        train: bool = True,
+        nb_binary_ops: Optional[Union[int, Tuple[int, ...]]] = None,
+        nb_unary_ops: Optional[Union[int, Tuple[int, ...]]] = None,
+        input_dimension: Optional[int] = None,
+        output_dimension: Optional[int] = None,
+        n_input_points: Optional[int] = None,
+        input_distribution_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Sample a single expression from the environment with optional per-call overrides.
+
+        Returns a dict including:
+        - tree: Node or NodeList (e2e expression tree)
+        - expr_str: human-readable infix string
+        - infos: metadata (ops counts, dims, length, distribution, etc.)
+        - X_to_fit, Y_to_fit: lists of numpy arrays (slices by points kept)
+        - x_to_predict_*, y_to_predict_*: optional prediction sets if enabled
+        - tree_encoded, skeleton_tree, skeleton_tree_encoded: tokens and skeletons
+        """
+        expr, _errors = self.env.gen_expr(
+            train=train,
+            nb_binary_ops=nb_binary_ops,
+            nb_unary_ops=nb_unary_ops,
+            input_dimension=input_dimension,
+            output_dimension=output_dimension,
+            n_input_points=n_input_points,
+            input_distribution_type=input_distribution_type,
+        )
+        tree = expr["tree"]
+        expr_str = str(tree)
+        # Attach a convenient field
+        result = dict(expr)
+        result["expr_str"] = expr_str
+        return result
+
+    # ---------------------- Data Generation ----------------------
+    def generate_data_for_tree(
+        self,
+        tree: Union[Node, NodeList],
+        n_input_points: int,
+        n_prediction_points: int = 0,
+        prediction_sigmas: Optional[str] = None,
+        input_distribution_type: str = "gaussian",
+        n_centroids: Optional[int] = None,
+        rotate: bool = True,
+        offset: Optional[Tuple[float, float]] = None,
+    ) -> Dict[str, Tuple[np.ndarray, np.ndarray]]:
+        """
+        Generate data for a provided e2e tree using the e2e generator.
+
+        - tree: Node/NodeList returned by generate_expression()
+        - n_input_points: number of fit points to sample
+        - n_prediction_points: number of prediction points per sigma
+        - prediction_sigmas: comma-separated string of sigma multipliers (overrides env)
+        - input_distribution_type: 'gaussian' or 'uniform'
+        - n_centroids: number of mixture components for input distribution (overrides env)
+        - rotate: rotate input distribution via random orthogonal matrices
+        - offset: optional (mean, std) scaling applied to inputs
+
+        Returns a dict like {'fit': (X_fit, Y_fit), 'predict_<sigma>': (X_pred, Y_pred), ...}
+        """
+        # Temporarily override env params for prediction points / sigmas
+        orig_n_pred = self.params.n_prediction_points
+        orig_sigmas = self.params.prediction_sigmas
+        try:
+            self.params.n_prediction_points = int(n_prediction_points)
+            if prediction_sigmas is not None:
+                self.params.prediction_sigmas = prediction_sigmas
+
+            # Parse prediction sigmas for generator API
+            if self.params.prediction_sigmas is None:
+                sigmas = []
+            else:
+                sigmas = [float(s) for s in str(self.params.prediction_sigmas).split(",") if str(s).strip()]
+
+            # Sample mixture count if not given
+            if n_centroids is None:
+                n_centroids = int(self.env.rng.randint(1, self.params.max_centroids))
+
+            tree_out, datapoints = self.env.generator.generate_datapoints(
+                tree=tree,
+                rng=self.env.rng,
+                input_dimension=self.env.generator.relabel_variables(tree),
+                n_input_points=n_input_points,
+                n_prediction_points=n_prediction_points,
+                prediction_sigmas=sigmas,
+                input_distribution_type=input_distribution_type,
+                n_centroids=int(n_centroids),
+                max_trials=self.params.max_trials,
+                rotate=rotate,
+                offset=offset,
+            )
+            if datapoints is None:
+                raise RuntimeError("Data generation failed for the provided tree")
+            return datapoints
+        finally:
+            self.params.n_prediction_points = orig_n_pred
+            self.params.prediction_sigmas = orig_sigmas
 
 
 def generate_e2e_expressions(
@@ -19,7 +251,8 @@ def generate_e2e_expressions(
     unary_ops: str = "",
     complexity: float = 0.5,
     n_input_points: int = 64,
-    seed: int = 42
+    seed: int = 42,
+    constants: List[float] = [1.0]
 ) -> List[Dict[str, Any]]:
     """
     Generate expressions using E2EDataGenerator.
@@ -31,20 +264,30 @@ def generate_e2e_expressions(
         complexity: Target complexity for expression generation (0.0 to 1.0)
         n_input_points: Number of data points to generate per expression
         seed: Random seed
+        constants: List of constants to use in expressions (default: [1.0])
 
     Returns:
         List of expression dicts with id, expression, X_data, y_data, metadata
     """
     np.random.seed(seed)
 
-    # Build e2e generator
-    gen = E2EDataGenerator(env_overrides={
+    # Build e2e generator with constant control
+    env_overrides = {
         "env_base_seed": seed,
         "use_controller": False,
         "allowed_binary_operators": binary_ops,
         "allowed_unary_operators": unary_ops,
+        "extra_constants": ",".join(str(c) for c in constants) if constants else None,
         "complexity": complexity,
-    })
+    }
+
+    # Control constant generation
+    if not constants or len(constants) == 0:
+        env_overrides["prob_const"] = 0.0  # Disable constant generation
+    else:
+        env_overrides["prob_const"] = 0.2  # Reasonable default for constant generation
+
+    gen = E2EDataGenerator(env_overrides=env_overrides)
 
     expressions = []
 
@@ -110,11 +353,13 @@ def generate_training_expressions(n_expressions: int = 100,
                                  complexity: float = 0.5,
                                  n_input_points: int = 64,
                                  seed: int = 42,
+                                 constants: List[float] = [1.0],
                                  output_dir: str = "datasets/expressions") -> str:
     """Generate training expressions with data and save to file"""
 
     print(f"Generating {n_expressions} training expressions...")
     print(f"Parameters: binary_ops={binary_ops}, unary_ops={unary_ops or 'none'}, complexity={complexity}")
+    print(f"Constants: {constants if constants else 'none'}")
     print(f"Data points per expression: {n_input_points}")
 
     # Generate expressions
@@ -124,12 +369,14 @@ def generate_training_expressions(n_expressions: int = 100,
         unary_ops=unary_ops,
         complexity=complexity,
         n_input_points=n_input_points,
-        seed=seed
+        seed=seed,
+        constants=constants
     )
 
     # Create metadata
+    const_str = ','.join(str(c) for c in constants) if constants else ''
     metadata = {
-        'generation_command': f"python generate_expressions.py --n_expressions={n_expressions} --binary_ops={binary_ops} --unary_ops={unary_ops} --complexity={complexity} --n_input_points={n_input_points} --seed={seed}",
+        'generation_command': f"python generate_expressions.py --n_expressions={n_expressions} --binary_ops={binary_ops} --unary_ops={unary_ops} --complexity={complexity} --n_input_points={n_input_points} --seed={seed} --constants={const_str}",
         'timestamp': datetime.now().isoformat(),
         'parameters': {
             'n_expressions': n_expressions,
@@ -137,7 +384,8 @@ def generate_training_expressions(n_expressions: int = 100,
             'unary_ops': unary_ops,
             'complexity': complexity,
             'n_input_points': n_input_points,
-            'seed': seed
+            'seed': seed,
+            'constants': constants
         },
         'generator_version': '2.0-e2e'
     }
@@ -162,7 +410,8 @@ def generate_training_expressions(n_expressions: int = 100,
     complexity_str = f"c{int(complexity * 10):02d}"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename = f"{output_dir}/train_{size_str}_{ops_str}_{complexity_str}_{timestamp}.pkl.gz"
+    # filename = f"{output_dir}/train_{size_str}_{ops_str}_{complexity_str}_{timestamp}.pkl.gz"
+    filename = f"{output_dir}/{ops_str}_{size_str}_{complexity_str}_{timestamp}.pkl.gz"
 
     # Save expressions
     save_expressions(expressions, filename, metadata)
@@ -173,252 +422,46 @@ def generate_training_expressions(n_expressions: int = 100,
     return filename
 
 
-# Kept for backward compatibility - old sympy-based generator (legacy)
-def generate_expressions_legacy(
-    n_expressions: int = 100,
-    max_size: int = 30,
-    min_size: int = 5,
-    seed: int = 42,
-    operators: List[str] = ['+', '-', '*', '/'],
-    constants: List[float] = [1.0, 2.0],
-    n_variables: int = 3,
-    max_depth: Optional[int] = None,
-) -> List[str]:
-    """
-    Generate n expressions with sizes uniformly sampled in [min_size, max_size].
+def demo_generate_n(n: int = 10) -> None:
+    """Example: generate N expressions with data and print a brief summary."""
+    gen = E2EDataGenerator(env_overrides={"env_base_seed": 0, "use_controller": False})
 
-    - Respects operator arity (unary/binary) and builds valid SymPy expressions.
-    - Avoids automatic evaluation to preserve intended tree structure.
-    - Handles operators like 'exp', 'log_10', and power ('^'/'pow').
+    print(f"Generating {n} expressions with data...\n")
+    for i in range(n):
+        sample = gen.generate_expression(
+            train=True,
+            # Per-sample overrides are optional; here we let the generator choose
+            # nb_binary_ops=None,
+            # nb_unary_ops=None,
+            # input_dimension=None,
+            # output_dimension=None,
+            # n_input_points=None,
+            # input_distribution_type=None,
+        )
+        expr_str = sample["expr_str"]
+        tree = sample["tree"]
+        X_fit_list = sample.get("X_to_fit", [])
+        Y_fit_list = sample.get("Y_to_fit", [])
+        X = X_fit_list[0] if X_fit_list else None
+        Y = Y_fit_list[0] if Y_fit_list else None
 
-    Notes on size: we count AST nodes where a leaf (variable or constant) counts as 1,
-    and an operator node counts as 1 plus its children. This ensures total node count
-    equals the target size exactly.
-    """
-    rng = random.Random(seed)
-    np.random.seed(seed)
-
-    names = ' '.join(f'x{i}' for i in range(n_variables))
-    # Set variables as real to avoid SymPy introducing re()/im() in simplifications
-    syms = sp.symbols(names, real=True)
-    # sp.symbols returns a single Symbol when n_variables == 1
-    var_pool = list(syms) if isinstance(syms, (tuple, list)) else [syms]
-
-    # Map operators to (arity, constructor). Use evaluate=False for arithmetic
-    # to avoid SymPy auto-merging constants or flattening trees.
-    op_registry = {
-        '+': (2, lambda a, b: sp.Add(a, b, evaluate=False)),
-        '-': (2, lambda a, b: sp.Add(a, sp.Mul(-1, b, evaluate=False), evaluate=False)),
-        '*': (2, lambda a, b: sp.Mul(a, b, evaluate=False)),
-        '/': (2, lambda a, b: sp.Mul(a, sp.Pow(b, -1, evaluate=False), evaluate=False)),
-        '^': (2, lambda a, b: sp.Pow(a, b, evaluate=False)),
-        'pow': (2, lambda a, b: sp.Pow(a, b, evaluate=False)),
-        'exp': (1, lambda a: sp.exp(a)),
-        'log': (1, lambda a: sp.log(a)),
-        'log_10': (1, lambda a: sp.log(a, 10)),
-        'sqrt': (1, lambda a: sp.sqrt(a)),
-        'sin': (1, lambda a: sp.sin(a)),
-        'cos': (1, lambda a: sp.cos(a)),
-        'tan': (1, lambda a: sp.tan(a)),
-        'abs': (1, lambda a: sp.Abs(a)),
-    }
-
-    # Filter to only the requested operators that we support
-    unary_ops = []
-    binary_ops = []
-    for op in operators:
-        if op not in op_registry:
-            raise ValueError(f"Operator {op} not provided.")
-        arity, fn = op_registry[op]
-        if arity == 1:
-            unary_ops.append((op, fn))
-        elif arity == 2:
-            binary_ops.append((op, fn))
-
-    if not unary_ops and not binary_ops:
-        raise ValueError("No valid operators provided.")
-
-    # Constant pool as SymPy objects
-    const_pool = [sp.Float(c) if not isinstance(c, (sp.Float, sp.Integer)) else c for c in constants]
-    if not const_pool:
-        const_pool = [sp.Integer(1)]
-
-    # Depth feasibility helpers
-    def max_nodes_possible(depth_left: int) -> int:
-        if depth_left < 0:
-            return 0
-        if binary_ops:
-            return (1 << (depth_left + 1)) - 1
-        elif unary_ops:
-            return depth_left + 1
+        print(f"{i+1:2d}. {expr_str}")
+        if X is not None and Y is not None:
+            y_min = float(np.min(Y)) if Y.size else float("nan")
+            y_max = float(np.max(Y)) if Y.size else float("nan")
+            print(f"    X: {X.shape}, Y: {Y.shape}, y-range=[{y_min:.3g}, {y_max:.3g}]")
         else:
-            return 1
-
-    def feasible(nodes: int, depth_left: Optional[int]) -> bool:
-        if nodes < 1:
-            return False
-        if depth_left is None:
-            return True
-        return nodes <= max_nodes_possible(depth_left)
-
-    # Use typing.Tuple for wider Python version compatibility
-    from typing import Tuple
-
-    def build_tree(target_nodes: int, must_use_var: bool, depth: int = 0) -> Tuple[sp.Expr, bool]:
-        """Recursively build a tree with exactly target_nodes and report if it uses any variable."""
-        assert target_nodes >= 1
-        depth_left = None if max_depth is None else (max_depth - depth)
-        if max_depth is not None and not feasible(target_nodes, depth_left):
-            raise ValueError("Infeasible size with current depth budget")
-
-        # Base case or depth cap
-        if target_nodes == 1 or (max_depth is not None and depth >= max_depth):
-            if must_use_var or rng.random() < 0.6:
-                sym = rng.choice(var_pool)
-                return sym, True
-            else:
-                c = rng.choice(const_pool)
-                return c, False
-
-        # Choose op type constrained by remaining budget
-        choices = []
-        # Unary option
-        if unary_ops and target_nodes >= 2:
-            if feasible(target_nodes - 1, None if max_depth is None else (max_depth - (depth + 1))):
-                choices.append('unary')
-        # Binary option
-        feasible_splits = []
-        if binary_ops and target_nodes >= 3:
-            rest = target_nodes - 1
-            for l_nodes in range(1, rest):
-                r_nodes = rest - l_nodes
-                if max_depth is None:
-                    feasible_splits.append((l_nodes, r_nodes))
-                else:
-                    dl = max_depth - (depth + 1)
-                    dr = dl
-                    if feasible(l_nodes, dl) and feasible(r_nodes, dr):
-                        feasible_splits.append((l_nodes, r_nodes))
-        if feasible_splits:
-            choices.append('binary')
-        if not choices:
-            raise ValueError("No feasible operator choice at this size/depth")
-
-        kind = rng.choice(choices)
-        if kind == 'unary':
-            op, fn = rng.choice(unary_ops)
-            child_nodes = target_nodes - 1
-            child, used_var = build_tree(child_nodes, must_use_var, depth + 1)
-            try:
-                expr = fn(child)
-            except Exception:
-                expr = child
-            return expr, used_var
-        else:
-            op, fn = rng.choice(binary_ops)
-            if feasible_splits:
-                l_nodes, r_nodes = rng.choice(feasible_splits)
-            else:
-                rest = target_nodes - 1
-                l_nodes = rng.randint(1, rest - 1)
-                r_nodes = rest - l_nodes
-
-            left_must_var = must_use_var and rng.random() < 0.5
-            right_must_var = must_use_var and not left_must_var
-
-            left, l_used = build_tree(l_nodes, left_must_var, depth + 1)
-            right, r_used = build_tree(r_nodes, right_must_var, depth + 1)
-
-            # Bias exponents to small integers for pow
-            if op in ('^', 'pow'):
-                if rng.random() < 0.7:
-                    choices_int = [-2, -1, 2, 3]
-                    if rng.random() < 0.5:
-                        right = sp.Integer(rng.choice(choices_int))
-                    else:
-                        left, right = right, sp.Integer(rng.choice(choices_int))
-
-            try:
-                expr = fn(left, right)
-            except Exception:
-                expr = left + right
-            return expr, (l_used or r_used)
-
-    results: List[str] = []
-
-    def renumber_variables(expr: sp.Expr) -> sp.Expr:
-        """Rename variables used in expr to contiguous names x0..x{k-1}.
-
-        Ensures we never emit expressions that reference, e.g., x2 without x1.
-        The order is based on the numeric suffix in each symbol's name.
-        """
-        if not expr.free_symbols:
-            return expr
-
-        def sym_index(s: sp.Symbol) -> int:
-            name = s.name
-            return int(name[1:]) if name.startswith('x') and name[1:].isdigit() else 10**9
-
-        used = sorted(list(expr.free_symbols), key=sym_index)
-        mapping = {}
-        for i, old in enumerate(used):
-            new = sp.Symbol(f"x{i}", real=True)
-            if old != new:
-                mapping[old] = new
-        return expr.xreplace(mapping) if mapping else expr
-    # Adjust feasible size band if depth-limited
-    size_lo, size_hi = min_size, max_size
-    if max_depth is not None:
-        global_max = max_nodes_possible(max_depth)
-        size_lo = max(1, size_lo)
-        size_hi = min(size_hi, global_max)
-        if size_lo > size_hi:
-            raise ValueError(f"Requested size range [{min_size},{max_size}] infeasible for max_depth={max_depth}; max feasible={global_max}")
-
-    # Uniformly sample sizes; keep trying until we collect n_expressions.
-    # Guard with a maximum number of total attempts to avoid infinite loops for
-    # pathological (size, depth, operator) combinations.
-    total_attempts = 0
-    max_total_attempts = max(200, 20 * n_expressions)
-    while len(results) < n_expressions and total_attempts < max_total_attempts:
-        total_attempts += 1
-        size = rng.randint(size_lo, size_hi)
-        try:
-            expr, used_var = build_tree(size, must_use_var=True, depth=0)
-            if not expr.free_symbols:
-                expr = sp.Add(expr, var_pool[0], evaluate=False)
-            expr = renumber_variables(expr)
-            results.append(str(expr))
-        except ValueError:
-            continue
-
-    # If still short (very strict constraints), backfill with trivial variable-based expressions
-    # to meet the requested count without raising.
-    while len(results) < n_expressions:
-        v = rng.choice(var_pool)
-        c = rng.choice([sp.Integer(1), sp.Integer(2)])
-        expr = sp.Add(v, c, evaluate=False)
-        expr = renumber_variables(expr)
-        results.append(str(expr))
-
-    return results
-
-
-def create_test_expressions(n_expressions: int = 10,
-                           seed: int = 42,
-                           output_dir: str = "datasets/expressions") -> str:
-    """Create a small test set of expressions"""
-    print(f"Creating test set with {n_expressions} expressions...")
-
-    return generate_training_expressions(
-        n_expressions=n_expressions,
-        binary_ops="add,sub,mul",
-        unary_ops="",
-        complexity=0.3,
-        n_input_points=64,
-        seed=seed,
-        output_dir=output_dir
-    )
+            # If you prefer fresh data using custom knobs, you can do:
+            data = gen.generate_data_for_tree(
+                tree=tree,
+                n_input_points=50,
+                n_prediction_points=0,
+                input_distribution_type="gaussian",
+            )
+            X, Y = data["fit"]
+            y_min = float(np.min(Y)) if Y.size else float("nan")
+            y_max = float(np.max(Y)) if Y.size else float("nan")
+            print(f"    X: {X.shape}, Y: {Y.shape}, y-range=[{y_min:.3g}, {y_max:.3g}]")
 
 
 if __name__ == "__main__":
@@ -432,21 +475,24 @@ if __name__ == "__main__":
     parser.add_argument("--n_input_points", type=int, default=64, help="Number of data points per expression")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--output_dir", default="datasets/expressions", help="Output directory")
-    parser.add_argument("--test", action="store_true", help="Generate small test set")
-
+    parser.add_argument("--constants", type=str, default="1.0", help="Comma-separated list of constants (default: 1.0, empty string for no constants)")
     args = parser.parse_args()
 
-    if args.test:
-        filename = create_test_expressions(args.n_expressions, args.seed, args.output_dir)
+    # Parse constants
+    if args.constants.strip():
+        constants_list = [float(c.strip()) for c in args.constants.split(',')]
     else:
-        filename = generate_training_expressions(
-            n_expressions=args.n_expressions,
-            binary_ops=args.binary_ops,
-            unary_ops=args.unary_ops,
-            complexity=args.complexity,
-            n_input_points=args.n_input_points,
-            seed=args.seed,
-            output_dir=args.output_dir
-        )
+        constants_list = []
+
+    filename = generate_training_expressions(
+        n_expressions=args.n_expressions,
+        binary_ops=args.binary_ops,
+        unary_ops=args.unary_ops,
+        complexity=args.complexity,
+        n_input_points=args.n_input_points,
+        seed=args.seed,
+        constants=constants_list,
+        output_dir=args.output_dir
+    )
 
     print(f"\n✓ Expression generation complete: {filename}")

@@ -243,6 +243,59 @@ class Timing(object):
         print(f"{message} in {dt:.1f} seconds")
 
 
+def print_structure(obj, indent=0, max_list_items=3, max_dict_items=10):
+  """Print the structure of a nested Python object (dict/list/etc)."""
+  prefix = "  " * indent
+
+  if isinstance(obj, dict):
+      print(f"{prefix}dict {{")
+      items = list(obj.items())[:max_dict_items]
+      for key, value in items:
+          print(f"{prefix}  '{key}': ", end="")
+          if isinstance(value, (dict, list)):
+              print()
+              print_structure(value, indent + 2, max_list_items, max_dict_items)
+          else:
+              print(f"{type(value).__name__}", end="")
+              if hasattr(value, 'shape'):  # numpy arrays
+                  print(f" shape={value.shape} dtype={value.dtype}")
+              elif isinstance(value, (str, int, float, bool)):
+                  print(f" = {repr(value)[:50]}")
+              else:
+                  print()
+      if len(obj) > max_dict_items:
+          print(f"{prefix}  ... ({len(obj) - max_dict_items} more keys)")
+      print(f"{prefix}}}")
+
+  elif isinstance(obj, list):
+      print(f"{prefix}list(length={len(obj)}) [")
+      if len(obj) > 0:
+          # Show first few items
+          for i, item in enumerate(obj[:max_list_items]):
+              print(f"{prefix}  [{i}]: ", end="")
+              if isinstance(item, (dict, list)):
+                  print()
+                  print_structure(item, indent + 2, max_list_items, max_dict_items)
+              else:
+                  print(f"{type(item).__name__}", end="")
+                  if hasattr(item, 'shape'):
+                      print(f" shape={item.shape} dtype={item.dtype}")
+                  elif isinstance(item, (str, int, float, bool)):
+                      print(f" = {repr(item)[:50]}")
+                  else:
+                      print()
+          if len(obj) > max_list_items:
+              print(f"{prefix}  ... ({len(obj) - max_list_items} more items)")
+      print(f"{prefix}]")
+
+  else:
+      print(f"{prefix}{type(obj).__name__}", end="")
+      if hasattr(obj, 'shape'):
+          print(f" shape={obj.shape} dtype={obj.dtype}")
+      else:
+          print()
+
+
 if __name__ == '__main__':
     c = torch.tensor(float('-inf'))
     print(logaddexp(c, c))

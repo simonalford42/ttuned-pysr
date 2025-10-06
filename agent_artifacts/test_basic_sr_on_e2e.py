@@ -21,7 +21,9 @@ def _ensure_local_paths():
 
 _ensure_local_paths()
 
-from e2e_data_gen import E2EDataGenerator
+# Import from main codebase
+sys.path.insert(0, os.path.join(repo_dir, ".."))
+from generate_expressions import E2EDataGenerator
 from basic_sr import BasicSR
 
 
@@ -37,7 +39,7 @@ def main(n: int = 10, seed: int = 0):
         "allowed_binary_operators": "add,sub,mul",
         # "allowed_unary_operators": "abs,sqrt,tan,inv,sin,cos",
         "allowed_unary_operators": "",
-        "complexity": 0.3,
+        "complexity": 0.5,
     })
 
     # Iterate over expressions
@@ -87,14 +89,14 @@ def main(n: int = 10, seed: int = 0):
             record_heritage=True,
         )
 
-        model.fit(X, y, verbose=True)
+        model.fit(X, y, verbose=False)
         y_pred = model.predict(X)
         mse = float(np.mean((y - y_pred) ** 2))
         print(f"    Best MSE={mse:.3e}; Best Expr={model.best_model_}")
 
         # print out the heritage
         heritage = model.retrieve_heritage_of_best_expression()
-        print([len(g) for g in heritage])
+        # print([len(g) for g in heritage])
 
 
 if __name__ == "__main__":

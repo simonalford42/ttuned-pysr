@@ -7,7 +7,7 @@ from datetime import datetime
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from training.format_utils import format_context, format_population_with_fitness, format_inference_input
+from format_utils import format_context, format_population_with_fitness, format_inference_input
 
 
 class Node:
@@ -117,6 +117,7 @@ class BasicSR:
                  early_stop_extra_generations=500,
                  binary_operators=['+', '-', '*', '/'],
                  unary_operators=['abs', 'exp', 'sqrt', 'sin', 'cos', 'tan', 'inv'],
+                 constants=[1.0],
                  record_heritage=False):
         self.population_size = population_size
         self.num_generations = num_generations
@@ -129,7 +130,7 @@ class BasicSR:
         self.binary_operators = binary_operators
         self.unary_operators = unary_operators
         self.operators = list(self.binary_operators)
-        self.constants = [1.0, 2.0]
+        self.constants = constants
         self.best_model_ = None
         self.trajectory = []
         self.best_progression = []  # Track (generation, expression, mse) when best improves
@@ -148,7 +149,8 @@ class BasicSR:
 
     def create_terminal(self, num_vars):
         """Create a terminal node (variable or constant)"""
-        if random.random() < 0.7:  # Prefer variables
+        # If no constants available, only create variables
+        if not self.constants or random.random() < 0.7:  # Prefer variables
             return Node(f"x{random.randint(0, num_vars-1)}")
         else:
             return Node(random.choice(self.constants))
@@ -358,7 +360,6 @@ class BasicSR:
             'fitnesses': fitnesses.tolist() if isinstance(fitnesses, np.ndarray) else fitnesses,
             'best_fitness': max(fitnesses),
             'best_expression': expressions[np.argmax(fitnesses)],
-            'population_diversity': len(set(expressions))  # Number of unique expressions
         }
 
         self.trajectory.append(state)
