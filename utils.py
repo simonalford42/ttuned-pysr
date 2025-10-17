@@ -92,6 +92,19 @@ def batch_cov(points):
     return bcov  # (B, D, D)
 
 
+def get_operators(operator_set: str):
+    if operator_set == "arith":
+        binary_operators = ["+", "-", "*"]
+        unary_operators = []
+    elif operator_set == "full":
+        binary_operators = ["+", "-", "*", "/", "^"]
+        unary_operators = ["sin", "cos", "exp", "log", "sqrt"]
+    else:
+        raise ValueError(f"Unknown operator set: {operator_set}")
+
+    return binary_operators, unary_operators
+
+
 def get_script_execution_command():
     return 'python ' + ' '.join(sys.argv)
 

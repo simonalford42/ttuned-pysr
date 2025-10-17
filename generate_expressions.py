@@ -19,6 +19,7 @@ import os
 import sys
 from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple, Union, Iterable
+from tqdm import tqdm
 
 
 def _ensure_e2e_on_path():
@@ -291,7 +292,7 @@ def generate_e2e_expressions(
 
     expressions = []
 
-    for i in range(n_expressions):
+    for i in tqdm(range(n_expressions)):
         # Generate expression with data
         sample = gen.generate_expression(train=True)
         expr_str = sample["expr_str"]

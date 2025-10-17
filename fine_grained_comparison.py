@@ -8,9 +8,10 @@ import time
 from basic_sr import BasicSR, NeuralSR
 from problems import HARDER_PROBLEMS
 import argparse
+from utils import get_operators
 
 
-def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000):
+def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[]):
     """Compare neural SR vs basic SR generation by generation with user input"""
     problem = HARDER_PROBLEMS[problem_idx]
     X, y = problem(seed=42)
@@ -27,7 +28,9 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
         population_size=20,
         num_generations=1,  # We'll run one generation at a time
         max_depth=4,
-        max_size=15
+        max_size=15,
+        binary_operators=binary_operators,
+        unary_operators=unary_operators,
     )
 
     try:
@@ -36,7 +39,9 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
             population_size=20,
             num_generations=1,  # We'll run one generation at a time
             max_depth=4,
-            max_size=15
+            max_size=15,
+            binary_operators=binary_operators,
+            unary_operators=unary_operators,
         )
     except Exception as e:
         print(f"Failed to initialize Neural SR: {e}")
@@ -99,8 +104,8 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
 
         # Generate new populations for next iteration
         if generation < max_generations - 1:  # Don't generate if this is the last iteration
-            basic_population = basic_sr.generate_new_population(basic_population, basic_fitnesses, basic_best_individual, num_vars, generation + 1)
-            neural_population = neural_sr.generate_new_population(neural_population, neural_fitnesses, neural_best_individual, num_vars, generation + 1)
+            basic_population, _ = basic_sr.generate_new_population(basic_population, basic_fitnesses, basic_best_individual, num_vars, generation + 1)
+            neural_population, _ = neural_sr.generate_new_population(neural_population, neural_fitnesses, neural_best_individual, num_vars, generation + 1)
 
     # Final summary
     print(f"\n=== Final Results ===")
@@ -139,13 +144,19 @@ def main():
                        help="Problem index to test (default: 0)")
     parser.add_argument("--max-generations", type=int, default=1000,
                        help="Maximum number of generations (default: 1000)")
+    parser.add_argument("--operator_set", type=str, default="arith", choices=["arith", "full"],
+                        help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
 
     args = parser.parse_args()
+
+    binary_operators, unary_operators = get_operators(args.operator_set)
 
     result = compare_neural_vs_basic_fine_grained(
         args.checkpoint,
         args.problem,
-        max_generations=args.max_generations
+        max_generations=args.max_generations,
+        binary_operators=binary_operators,
+        unary_operators=unary_operators
     )
     if result:
         print("\n✓ Fine-grained comparison completed!")

@@ -39,7 +39,7 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
         # Extract operators and constants from trajectory
         binary_operators = sorted(traj['binary_operators'])
         unary_operators = sorted(traj.get('unary_operators', []))
-        constants = sorted([str(c) for c in traj['constants']])
+        constants = traj['constants']
 
         X, y = traj['X_data'], traj['y_data']
         num_variables = X.shape[1]
@@ -141,7 +141,7 @@ def split_train_val(input_file, train_file, val_file, val_split=0.1, seed=42):
     return len(train_data), len(val_data)
 
 
-def convert_and_make_split(input_file, context_type):
+def convert_and_make_split(input_file, context_type, split=True):
     # Generate output filename from input filename
     input_path = Path(input_file)
     input_filename = input_path.stem  # Remove extension
@@ -157,21 +157,15 @@ def convert_and_make_split(input_file, context_type):
     output_file = output_dir / output_filename
 
     # Convert trajectories to temporary file
-    converted_data = convert_basicsr_to_one_step_format(input_file, str(output_file), context_type)
     print(f"Using {context_type} context type")
+    convert_basicsr_to_one_step_format(input_file, str(output_file), context_type)
 
-    # Generate train/val file names
-    base_name = str(output_file).replace('.jsonl', '')
-    train_file = f"{base_name}_train.jsonl"
-    val_file = f"{base_name}_val.jsonl"
+    if split:
+        base_name = str(output_file).replace('.jsonl', '')
+        train_file = f"{base_name}_train.jsonl"
+        val_file = f"{base_name}_val.jsonl"
 
-    # Split into train/val (10% validation)
-    split_train_val(str(output_file), train_file, val_file, val_split=0.1, seed=42)
-
-    # Remove temporary file
-    import os
-    os.remove(output_file)
-    print(f"Removed temporary file: {output_file}")
+        split_train_val(str(output_file), train_file, val_file, val_split=0.1, seed=42)
 
 
 def main():
@@ -179,8 +173,9 @@ def main():
     parser.add_argument("--input", required=True, help="Input trace file (.pkl.gz)")
     parser.add_argument("--context_type", default="basic", choices=["basic", "rich", "superrich"],
                        help="Context type to use: basic (default), rich (with data stats), or superrich (with plot)")
+    parser.add_argument("--no_split", action="store_true", help="If set, do not split into train/val sets")
     args = parser.parse_args()
-    convert_and_make_split(args.input, args.context_type)
+    convert_and_make_split(args.input, args.context_type, split=not args.no_split)
 
 
 if __name__ == "__main__":

@@ -13,6 +13,7 @@ from typing import List, Dict, Any
 from basic_sr import BasicSR
 import random
 import sympy as sp
+from utils import get_operators
 
 
 def load_expressions_dataset(filepath: str) -> List[Dict[str, Any]]:
@@ -97,24 +98,15 @@ def generate_traces_from_expressions(expressions_file: str,
                                    max_expressions: int = None,
                                    seed: int = 42,
                                    operator_set: str = "full",
-                                   constants: List[float] = [1.0]) -> str:
+                                   constants: List[float] = None) -> str:
     """Generate BasicSR traces from expression dataset
 
     Args:
         operator_set: Either "full" (all operators) or "arith" (add/sub/mul only)
-        constants: List of constants to use (default: [1.0])
+        constants: List of constants to use (if None uses constants from expression generation)
     """
 
-    # Map operator sets to BasicSR operators
-    if operator_set == "arith":
-        binary_operators = ["+", "-", "*"]
-        unary_operators = []
-    elif operator_set == "full":
-        binary_operators = ["+", "-", "*", "/", "^"]
-        unary_operators = ["abs", "sqrt", "sin", "cos", "tan", "inv"]
-    else:
-        raise ValueError(f"Unknown operator_set: {operator_set}. Use 'arith' or 'full'")
-
+    binary_operators, unary_operators = get_operators(operator_set)
     # Default BasicSR parameters
     if basicsr_params is None:
         basicsr_params = {
@@ -126,29 +118,12 @@ def generate_traces_from_expressions(expressions_file: str,
         }
 
     print(f"=== Generating traces from {expressions_file} ===")
-    print(f"BasicSR parameters: {basicsr_params}")
-    print(f"Operator set: {operator_set} (binary: {binary_operators}, unary: {unary_operators})")
-    print(f"Constants: {constants}")
 
     # Load expressions
     expressions, expr_metadata = load_expressions_dataset(expressions_file)
 
-    # Check if expressions were generated with constants
-    expr_constants = expr_metadata.get('parameters', {}).get('constants', [1.0])
-
-    # If expressions don't use constants, BasicSR shouldn't either
-    if not expr_constants or len(expr_constants) == 0:
-        if constants and len(constants) > 0:
-            print(f"⚠ Expression dataset was generated WITHOUT constants")
-            print(f"  Ignoring provided constants {constants} and using empty constant set for BasicSR")
-        constants = []
-        print(f"Expression dataset has no constants; BasicSR will use no constants")
-    else:
-        # Use constants from expression metadata if not explicitly overridden
-        print(f"Expression dataset uses constants: {expr_constants}")
-        if constants == [1.0]:  # If using default, prefer expression metadata
-            constants = expr_constants
-            print(f"Using constants from expression metadata: {constants}")
+    if constants is None:
+        constants = expr_metadata['parameters']['constants']
 
     # Limit number of expressions if specified
     if max_expressions:
@@ -159,6 +134,10 @@ def generate_traces_from_expressions(expressions_file: str,
     os.makedirs(output_dir, exist_ok=True)
 
     all_trajectories = []
+
+    print(f"BasicSR parameters: {basicsr_params}")
+    print(f"Operator set: {operator_set} (binary: {binary_operators}, unary: {unary_operators})")
+    print(f"Constants: {constants}")
 
     for i, expr_data in enumerate(expressions):
         expr_id = expr_data['id']
@@ -178,20 +157,11 @@ def generate_traces_from_expressions(expressions_file: str,
 
         # Run BasicSR with trajectory collection
         model = BasicSR(
-            population_size=basicsr_params['population_size'],
-            num_generations=basicsr_params['num_generations'],
-            max_depth=basicsr_params['max_depth'],
-            max_size=basicsr_params['max_size'],
-            tournament_size=basicsr_params['tournament_size'],
             collect_trajectory=True,
-            time_limit=basicsr_params.get('time_limit', 30),
-            # Ensure at least 2 generations are recorded before early stopping kicks in
-            early_stop=True,
-            early_stop_threshold=3e-16,
-            min_generations=2,
             binary_operators=binary_operators,
             unary_operators=unary_operators,
             constants=constants,
+            **basicsr_params,
         )
 
         # Fit and collect trajectory
@@ -312,17 +282,17 @@ if __name__ == "__main__":
     parser.add_argument("--num_generations", type=int, default=50, help="BasicSR num generations")
     parser.add_argument("--operator_set", type=str, default="full", choices=["arith", "full"],
                         help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
-    parser.add_argument("--constants", type=str, default="1.0",
-                        help="Comma-separated list of constants (default: 1.0, empty string for no constants)")
+    parser.add_argument("--constants", type=str, default=None,
+                        help="Comma-separated list of constants (default: uses constants used in expression generation. Empty string for no constants)")
     parser.add_argument("--create_one_step", action="store_true", help="Also convert to one-step format and create train/val splits")
 
     args = parser.parse_args()
 
     # Parse constants
-    if args.constants.strip():
-        constants_list = [float(c.strip()) for c in args.constants.split(',')]
+    if args.constants:
+        constants = [float(c.strip()) for c in args.constants.split(',')]
     else:
-        constants_list = []
+        constants = None
 
     basicsr_params = {
         'population_size': args.population_size,
@@ -338,7 +308,7 @@ if __name__ == "__main__":
         basicsr_params,
         args.max_expressions,
         operator_set=args.operator_set,
-        constants=constants_list
+        constants=constants
     )
 
     if args.create_one_step:

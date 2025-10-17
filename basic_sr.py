@@ -113,7 +113,6 @@ class BasicSR:
                  time_limit=None,
                  early_stop=True,
                  early_stop_threshold=3e-16,
-                 min_generations=0,
                  early_stop_extra_generations=500,
                  binary_operators=['+', '-', '*', '/'],
                  unary_operators=['abs', 'exp', 'sqrt', 'sin', 'cos', 'tan', 'inv'],
@@ -136,7 +135,6 @@ class BasicSR:
         self.best_progression = []  # Track (generation, expression, mse) when best improves
         self.early_stop = early_stop
         self.early_stop_threshold = early_stop_threshold
-        self.min_generations = min_generations
         # After hitting early-stop MSE, continue this many extra generations
         # to seek simpler or slightly better solutions. Each time a new best (simpler
         # or lower MSE) is found during the extra phase, extend by the same amount.
@@ -448,8 +446,7 @@ class BasicSR:
                     print(f"Gen {generation}: MSE={mse:.6f}, Size={size}, Expr={best_individual}")
 
                 # Early-stop triggering: switch to extra phase instead of stopping
-                if (not in_extra_phase and self.early_stop and (generation + 1) >= self.min_generations
-                        and mse <= self.early_stop_threshold):
+                if (not in_extra_phase and self.early_stop and mse <= self.early_stop_threshold):
                     in_extra_phase = True
                     gen_limit += self.early_stop_extra_generations
                     if verbose:

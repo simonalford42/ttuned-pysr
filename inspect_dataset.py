@@ -132,7 +132,7 @@ def inspect_trace_dataset(data: dict, n_samples: int = 5, stats_sample_size: int
             print(f"    Best expression: {last_gen['expressions'][np.argmin(last_gen['fitnesses'])]}")
 
 
-def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: int = 1000):
+def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: int = 1000, interactive: bool = False):
     """Load and inspect a dataset, automatically detecting type."""
     print(f"Loading dataset: {dataset_path}\n")
 
@@ -151,9 +151,11 @@ def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: in
         print(f"Found keys: {list(data.keys())}")
 
     # print the structure of the data file
-    from utils import print_structure
-    print_structure(data)
-    import pdb; pdb.set_trace()
+    # from utils import print_structure
+    # print_structure(data)
+
+    if interactive:
+        import pdb; pdb.set_trace()
 
 
 def main():
@@ -163,9 +165,11 @@ def main():
                         help="Number of examples to show (default: 5)")
     parser.add_argument("--stats_sample_size", type=int, default=50,
                         help="Number of trajectories to sample for stats calculation (default: 1000)")
+    parser.add_argument("--interactive", action="store_true",
+                        help="Drop into interactive debugger after inspection")
 
     args = parser.parse_args()
-    inspect_dataset(args.dataset_path, args.n_samples, args.stats_sample_size)
+    inspect_dataset(args.dataset_path, args.n_samples, args.stats_sample_size, args.interactive)
 
 
 if __name__ == "__main__":

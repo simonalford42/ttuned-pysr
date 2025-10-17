@@ -146,3 +146,5 @@ https://arxiv.org/abs/2304.03843
 "Why think step by step? Reasoning emerges from the locality of experience"
 
 https://proceedings.neurips.cc/paper_files/paper/2024/file/78f0db30c39c850de728c769f42fc903-Paper-Conference.pdf
+
+# Thoughts 10/16
