@@ -423,3 +423,140 @@ python generate_expressions.py --n_expressions 100 --constants ""
 python generate_traces.py --expressions_file datasets/expressions/train_*.pkl.gz
 ```
 
+
+## 2025-10-20: Created Autoregressive Training Pipeline
+
+### Summary
+Created two new files to enable autoregressive training for neural symbolic regression, complementing the existing one-step prediction approach:
+
+1. **autoreg_conversion.py**: Converts BasicSR trajectory traces into autoregressive training format
+2. **train_autoreg.py**: Training script for autoregressive population generation
+
+### Key Differences from One-Step Approach
+
+#### One-Step (Existing)
+- **Data format**: Multiple examples per generation transition, one for each expression in next population
+- **Training objective**: Given context + current population → predict single next expression
+- **Sampling**: Can sample a fraction of expressions from each generation (via `sample_fraction`)
+- **Use case**: Model predicts individual expressions, need to sample N times to get full population
+
+#### Autoregressive (New)
+- **Data format**: One example per generation transition
+- **Training objective**: Given context + current population → predict entire next population autoregressively
+- **Sampling**: Can sample a fraction of trajectories (via `sample_fraction`)
+- **Use case**: Model generates entire population in one forward pass (more aligned with stream-of-search)
+
+### Implementation Details
+
+**autoreg_conversion.py**:
+- Takes same input format as one_step_conversion.py (.pkl.gz trajectory files)
+- Creates JSONL with format: `{"context": ..., "population": ..., "target": "expr1 <FITNESS>f1 expr2 <FITNESS>f2 ..."}`
+- Target is entire next population formatted as single string to be generated autoregressively
+- Supports all three context types: basic, rich, superrich
+- `sample_fraction` parameter samples trajectories (not individual expressions)
+- Includes train/val split functionality
+
+**train_autoreg.py**:
+- Based on train_one_step.py with same model architecture support
+- Tokenization trains model to autoregressively complete entire population
+- Labels: -100 for context/population input, actual tokens for target population
+- Uses same special tokens: `<CONTEXT>`, `<POPULATION>`, `<FITNESS>`, `<TARGET>`
+- Default config path: `training/configs/autoreg-s.json`
+
+### Usage Example
+
+```bash
+# Convert traces to autoregressive format
+python autoreg_conversion.py \
+    --input datasets/traces/gen50_train_1k_arith_c05.pkl.gz \
+    --context_type basic \
+    --split
+
+# Train autoregressive model
+python train_autoreg.py --config training/configs/autoreg-s.json
+```
+
+### Next Steps
+- Create config file at `training/configs/autoreg-s.json` for autoregressive training
+- Test conversion and training pipeline
+- Compare autoregressive vs one-step performance in neural SR
+
+
+## 2025-10-21: Added Autoregressive Support to NeuralSR
+
+### Summary
+Extended the `NeuralSR` class in `basic_sr.py` to support both one-step and autoregressive models, enabling unified testing and comparison of both approaches.
+
+### Changes Made
+
+**1. Added `autoregressive` parameter to NeuralSR**
+- New parameter: `autoregressive=False` (default)
+- When `True`, uses autoregressive generation mode
+- When `False`, uses existing one-step generation mode
+
+**2. Refactored generation methods**
+- Split `generate_new_population()` into dispatch method
+- Created `generate_new_population_onestep()` for one-step models (existing logic)
+- Created `generate_new_population_autoregressive()` for autoregressive models (new)
+
+**3. Autoregressive generation implementation**
+- Single forward pass generates entire population as space-separated expressions
+- Longer context window: `max_new_tokens = max(200, 10 * population_size)`
+- Parses generated text into individual expressions
+- Falls back to evolutionary operators if insufficient well-formed expressions
+- Tracks neural suggestion statistics same as one-step mode
+
+**4. Created test script**
+- `test_autoreg_neural.py`: Simple test script for autoregressive models
+- Tests with checkpoint: `training/checkpoints/tiny_218153/checkpoint-50000`
+- Validates autoregressive generation on simple problem (y=x)
+
+### Key Differences
+
+**One-Step Mode** (`autoregressive=False`):
+- Generates `population_size-1` expressions in parallel
+- Each expression generated independently
+- Output format: individual expressions
+
+**Autoregressive Mode** (`autoregressive=True`):
+- Single generation pass for entire population
+- Model outputs space-separated expressions
+- Output format: "expr1 expr2 expr3 ..."
+- Parses and validates each expression individually
+
+### Usage Example
+
+```python
+# One-step model (existing)
+model = NeuralSR(
+    model_path="training/checkpoints/onestep-tiny/final_model",
+    autoregressive=False,  # default
+    population_size=20,
+    num_generations=10
+)
+
+# Autoregressive model (new)
+model = NeuralSR(
+    model_path="training/checkpoints/tiny_218153/checkpoint-50000",
+    autoregressive=True,  # enables autoreg mode
+    population_size=20,
+    num_generations=10
+)
+
+# Both use the same API
+model.fit(X, y, verbose=True)
+predictions = model.predict(X)
+```
+
+### Testing
+- Successfully tested with `test_autoreg_neural.py`
+- Model generates expressions like "x0", "(x0 + x0)", "((x0 * x0) + x0)"
+- Parsing and fallback mechanisms work correctly
+- Well-formed percentage tracking functional
+
+### Benefits
+- Unified interface for both model types in NeuralSR
+- Easy to test and compare one-step vs autoregressive approaches
+- Can use same evaluation scripts (`neural_comparison.py`, `fine_grained_comparison.py`)
+- Clean abstraction separates generation logic from core SR algorithm
+

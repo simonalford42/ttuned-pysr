@@ -17,9 +17,10 @@ def _ensure_local_paths():
     e2e_dir = os.path.join(repo_dir, "e2e_sr")
     if e2e_dir not in sys.path:
         sys.path.insert(0, e2e_dir)
+    return repo_dir
 
 
-_ensure_local_paths()
+repo_dir = _ensure_local_paths()
 
 # Import from main codebase
 sys.path.insert(0, os.path.join(repo_dir, ".."))
@@ -74,7 +75,7 @@ def main(n: int = 10, seed: int = 0):
         # Configure and run BasicSR
         model = BasicSR(
             population_size=20,
-            num_generations=10000,
+            num_generations=1000,
             max_depth=10,
             max_size=25,
             tournament_size=3,
@@ -82,22 +83,22 @@ def main(n: int = 10, seed: int = 0):
             time_limit=None,
             early_stop=True,
             early_stop_threshold=3e-16,
-            min_generations=2,
             binary_operators=['+', '-', '*'],
             # unary_operators=['abs', 'sqrt', 'cos', 'sin', 'inv', 'tan'],
             unary_operators=[],
             record_heritage=True,
         )
 
-        model.fit(X, y, verbose=False)
+        model.fit(X, y, verbose=True)
         y_pred = model.predict(X)
         mse = float(np.mean((y - y_pred) ** 2))
         print(f"    Best MSE={mse:.3e}; Best Expr={model.best_model_}")
 
         # print out the heritage
         heritage = model.retrieve_heritage_of_best_expression()
-        # print([len(g) for g in heritage])
+        print([len(g) for g in heritage])
+        # print(heritage)
 
 
 if __name__ == "__main__":
-    main(n=10, seed=1)
+    main(n=5, seed=1)
