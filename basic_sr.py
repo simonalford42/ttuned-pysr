@@ -108,6 +108,7 @@ class BasicSR:
                  num_generations=50,
                  max_depth=4,
                  max_size=15,
+                 max_generations=None,
                  tournament_size=3,
                  collect_trajectory=False,
                  time_limit=None,
@@ -142,8 +143,6 @@ class BasicSR:
         self.record_heritage = record_heritage
         if self.record_heritage:
             self.collect_trajectory = True
-        # for each generation, for each expression, a tuple of ixs of parents
-        self.heritage_log: list[list[list]] = []
 
     def create_terminal(self, num_vars):
         """Create a terminal node (variable or constant)"""
@@ -343,7 +342,7 @@ class BasicSR:
 
         return new_population, heritages
 
-    def record_population_state(self, population, fitnesses, generation):
+    def record_population_state(self, population, fitnesses, generation, heritages):
         """Record the current population state (only if collect_trajectory=True)"""
         if not self.collect_trajectory:
             return
@@ -358,6 +357,7 @@ class BasicSR:
             'fitnesses': fitnesses.tolist() if isinstance(fitnesses, np.ndarray) else fitnesses,
             'best_fitness': max(fitnesses),
             'best_expression': expressions[np.argmax(fitnesses)],
+            'heritages': heritages,
         }
 
         self.trajectory.append(state)
@@ -366,9 +366,9 @@ class BasicSR:
         """Evolve expressions to fit the data"""
         num_vars = X.shape[1]
         population = self.create_initial_population(num_vars)
-        if self.record_heritage:
-            # initially, each individual has no parents
-            self.heritage_log = [[[] for _ in range(len(population))]]
+
+        # initially, each individual has no parents
+        heritages = [[] for _ in range(len(population))]
 
         best_fitness = -float('inf')
         best_individual = None
@@ -382,7 +382,6 @@ class BasicSR:
 
         generation = 0
         gen_limit = self.num_generations
-        in_extra_phase = False
         best_mse = float('inf')
         best_size = float('inf')
         last_improve_gen = -1
@@ -399,7 +398,7 @@ class BasicSR:
             fitnesses = np.array(fitnesses)
 
             # Record current state (if trajectory collection is enabled)
-            self.record_population_state(population, fitnesses, generation)
+            self.record_population_state(population, fitnesses, generation, heritages)
 
             # Track best
             current_best_idx = np.argmax(fitnesses)
@@ -446,25 +445,18 @@ class BasicSR:
                     print(f"Gen {generation}: MSE={mse:.6f}, Size={size}, Expr={best_individual}")
 
                 # Early-stop triggering: switch to extra phase instead of stopping
-                if (not in_extra_phase and self.early_stop and mse <= self.early_stop_threshold):
-                    in_extra_phase = True
-                    gen_limit += self.early_stop_extra_generations
+                if self.early_stop and mse <= self.early_stop_threshold:
+                    gen_limit = min(self.num_generations, generation + self.early_stop_extra_generations)
                     if verbose:
-                        print(f"MSE near-zero ({mse:.2e}). Continuing {self.early_stop_extra_generations} extra gens to try simplifying.")
-
-                # During extra phase, extend if we find a new best that is simpler or lower MSE
-                if in_extra_phase and improved_simple_or_mse:
-                    gen_limit += self.early_stop_extra_generations
-                    if verbose:
-                        print(f"New best during extra phase (mse={mse:.2e}, size={size}). Extending by {self.early_stop_extra_generations} more gens.")
+                        print(f"MSE near-zero ({mse:.2e}). Continuing to try simplifying.")
 
             # Create new population
             population, heritages = self.generate_new_population(population, fitnesses, best_individual, num_vars, generation)
-            if self.record_heritage:
-                self.heritage_log.append(heritages)
             generation += 1
 
         self.best_model_ = best_individual
+
+        self.update_ancestry_info()
         return self
 
     def predict(self, X):
@@ -490,7 +482,7 @@ class BasicSR:
         """Get the full progression data"""
         return self.best_progression.copy()
 
-    def retrieve_heritage_of_best_expression(self):
+    def update_ancestry_info(self):
         """Reconstruct and return the ancestry subgraph for a target expression.
 
         Requirements:
@@ -510,19 +502,22 @@ class BasicSR:
         ]
         """
         if not (self.record_heritage and self.collect_trajectory):
-            raise ValueError("record_heritage and collect_trajectory must be True during fit to reconstruct ancestry")
+            return
 
         generation = len(self.trajectory) - 1
         # Step 1: determine the set of ancestor indices per generation, from 0..generation
         ancestors_by_gen = {generation: [0]}
         for gen in range(generation, 0, -1):
-            full_parents = self.heritage_log[gen]
+            full_parents = self.trajectory[gen]['heritages']
             needed_prev = set()
             for idx in ancestors_by_gen[gen]:
                 for p in full_parents[idx]:
                     needed_prev.add(int(p))
             # Deterministic order: ascending original indices
             ancestors_by_gen[gen - 1] = sorted(needed_prev)
+
+        for i in range(len(self.trajectory)):
+            self.trajectory[i]['ancestors_of_best'] = ancestors_by_gen[i]
 
         # Step 2: reindex parents within the ancestor subsets and emit structure
         result = []
@@ -536,7 +531,7 @@ class BasicSR:
                 prev_reindex = {}
 
             expressions = self.trajectory[gen]['expressions']
-            full_parents = self.heritage_log[gen]
+            full_parents = self.trajectory[gen]['heritages']
 
             gen_items = []
             for orig_ix in current_indices:
@@ -552,48 +547,19 @@ class BasicSR:
         # is simply copied forward without any change (no new ancestors),
         # i.e., consecutive gens each have one node with identical expr and
         # its parent mapping is [0].
-        while len(result) >= 2:
-            curr = result[-1]
-            prev = result[-2]
-            if len(curr) == 1 and len(prev) == 1:
-                expr_curr, parents_curr = curr[0]
-                expr_prev, _ = prev[0]
-                if expr_curr == expr_prev and parents_curr == [0]:
-                    result.pop()
-                    continue
-            break
-
+        # while len(result) >= 2:
+        #     curr = result[-1]
+        #     prev = result[-2]
+        #     if len(curr) == 1 and len(prev) == 1:
+        #         expr_curr, parents_curr = curr[0]
+        #         expr_prev, _ = prev[0]
+        #         if expr_curr == expr_prev and parents_curr == [0]:
+        #             result.pop()
+        #             continue
+        #     break
+        assert len(result) == len(self.trajectory)
+        self.heritage_info = result
         return result
-
-
-
-    def save_trajectory(self, filename):
-        """Save the collected trajectory to a JSON file"""
-        if not self.collect_trajectory:
-            raise ValueError("Trajectory collection was not enabled. Set collect_trajectory=True when initializing.")
-
-        os.makedirs('data', exist_ok=True)
-
-        trajectory_data = {
-            'metadata': {
-                'timestamp': datetime.now().isoformat(),
-                'population_size': self.population_size,
-                'num_generations': self.num_generations,
-                'max_depth': self.max_depth,
-                'max_size': self.max_size,
-                'tournament_size': self.tournament_size,
-                'total_generations_recorded': len(self.trajectory)
-            },
-            'trajectory': self.trajectory
-        }
-
-        filepath = os.path.join('data', filename)
-        with open(filepath, 'w') as f:
-            json.dump(trajectory_data, f, indent=2)
-
-        print(f"Trajectory saved to {filepath}")
-        return filepath
-
 
 def test_on_problems(problem_set, title):
     """Test on a set of problems"""
@@ -647,9 +613,10 @@ def test_on_simple():
 class NeuralSR(BasicSR):
     """Neural version of BasicSR that uses a trained transformer for population generation"""
 
-    def __init__(self, model_path, tokenizer_name="EleutherAI/gpt-neo-1.3B", **kwargs):
+    def __init__(self, model_path, tokenizer_name="EleutherAI/gpt-neo-1.3B", autoregressive=False, **kwargs):
         super().__init__(**kwargs)
         self.model_path = model_path
+        self.autoregressive = autoregressive
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
         # Resolve a valid model directory: accept either a leaf model dir (with config.json)
@@ -768,7 +735,21 @@ class NeuralSR(BasicSR):
         return self.expr_parser.parse(text)
 
     def generate_new_population(self, population, fitnesses, best_individual, num_vars, generation=0):
-        """Generate new population using neural model predictions with parallel sampling.
+        """Generate new population using neural model predictions.
+
+        Returns (new_population, heritages), where heritages is a list-of-list of parent
+        indices into the previous generation. For NeuralSR, we record:
+        - Elite (index 0): [best_prev_ix], where best_prev_ix = argmax(fitnesses)
+        - Model-generated children: [] (no explicit parents tracked)
+        - Fallback evolution children: [parent_ix] or [parent1_ix, parent2_ix]
+        """
+        if self.autoregressive:
+            return self.generate_new_population_autoregressive(population, fitnesses, best_individual, num_vars, generation)
+        else:
+            return self.generate_new_population_onestep(population, fitnesses, best_individual, num_vars, generation)
+
+    def generate_new_population_onestep(self, population, fitnesses, best_individual, num_vars, generation=0):
+        """Generate new population using one-step model predictions with parallel sampling.
 
         Returns (new_population, heritages), where heritages is a list-of-list of parent
         indices into the previous generation. For NeuralSR, we record:
@@ -865,7 +846,7 @@ class NeuralSR(BasicSR):
             all_predicted_targets.append(first_expr if first_expr else generated)
 
         # Print all predicted targets on one line separated by spaces
-        print("PREDICTED TARGETS:", " ".join(all_predicted_targets))
+        # print("PREDICTED TARGETS:", " ".join(all_predicted_targets))
 
         # Now parse and add to population
         for i, first_expr in enumerate(all_predicted_targets):
@@ -888,44 +869,141 @@ class NeuralSR(BasicSR):
 
         return new_population, heritages
 
+    def generate_new_population_autoregressive(self, population, fitnesses, best_individual, num_vars, generation=0):
+        """Generate new population using autoregressive model prediction.
+
+        Autoregressive models predict the entire next population in one generation pass,
+        outputting space-separated expressions.
+
+        Returns (new_population, heritages), where heritages is a list-of-list of parent
+        indices into the previous generation.
+        """
+        new_population = []
+        heritages = []
+
+        # Elitism: keep best
+        new_population.append(best_individual.copy())
+        best_prev_ix = int(np.argmax(fitnesses))
+        heritages.append([best_prev_ix])
+
+        # Format input for neural model
+        context, population_str = self.format_context_and_population(population, fitnesses, num_vars, generation)
+
+        # Create input prompt using shared formatting
+        input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
+
+        # Tokenize and generate entire population in one pass
+        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+
+        with torch.no_grad():
+            # Generate longer sequence for autoregressive (entire population)
+            # Estimate: ~20 chars per expr * population_size / 3 chars per token = ~7 * pop_size tokens
+            max_new_tokens = max(200, 10 * self.population_size)
+
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=0.8,
+                do_sample=True,
+                pad_token_id=self.tokenizer.eos_token_id,
+                eos_token_id=self.tokenizer.eos_token_id
+            )
+
+        # Decode the generated output
+        prompt_len = inputs["input_ids"].shape[1]
+        full_gen_ids = outputs[0, prompt_len:]
+
+        # Identify stop token ids
+        eos_id = self.tokenizer.eos_token_id
+        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else eos_id
+        stop_token_texts = ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]
+        stop_token_ids = []
+        for tok in stop_token_texts:
+            try:
+                tid = self.tokenizer.convert_tokens_to_ids(tok)
+                if tid is not None and tid != self.tokenizer.unk_token_id:
+                    stop_token_ids.append(tid)
+            except Exception:
+                pass
+        for tid in [eos_id, pad_id]:
+            if tid is not None:
+                stop_token_ids.append(tid)
+
+        # Find first occurrence of any stop token
+        cut_idx = None
+        for j, tid in enumerate(full_gen_ids.tolist()):
+            if tid in stop_token_ids:
+                cut_idx = j
+                break
+        gen_ids = full_gen_ids[:cut_idx] if cut_idx is not None else full_gen_ids
+
+        # Decode the entire generated population
+        generated_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+        # Remove any control tokens that may have been emitted
+        for tok in stop_token_texts:
+            if tok in generated_text:
+                generated_text = generated_text.split(tok, 1)[0].strip()
+
+        print(f"AUTOREG PREDICTED: {generated_text}")
+
+        # Parse the generated expressions by grouping balanced parentheses
+        # Expressions are separated by spaces, but spaces can appear inside expressions.
+        def split_generated_expressions(text: str):
+            parts = []
+            s = text.strip()
+            if not s:
+                return parts
+            stop_markers = {"<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"}
+            while s:
+                # If any stop marker appears at start, stop parsing further
+                if any(s.startswith(m) for m in stop_markers):
+                    break
+                expr = self.extract_first_expression(s)
+                if not expr:
+                    break
+                parts.append(expr.strip())
+                # Advance the cursor by length of extracted expression
+                if len(expr) >= len(s):
+                    break
+                s = s[len(expr):].lstrip()
+            return parts
+
+        predicted_expressions = split_generated_expressions(generated_text)
+
+        # Try to parse each expression
+        parsed_count = 0
+        for expr_str in predicted_expressions:
+            if len(new_population) >= self.population_size:
+                break  # We have enough members
+
+            self.neural_suggestions_total += 1
+
+            try:
+                new_expr = self.parse_generated_expression(expr_str)
+                self.neural_suggestions_well_formed += 1
+                new_population.append(new_expr)
+                heritages.append([])
+                parsed_count += 1
+            except Exception:
+                # Skip malformed expressions
+                continue
+
+        # If we don't have enough members, fill with evolution
+        while len(new_population) < self.population_size:
+            child, parent_ixs = self.generate_child_via_evolution(population, fitnesses, num_vars)
+            new_population.append(child)
+            heritages.append(parent_ixs)
+
+        print(f"Parsed {parsed_count}/{len(predicted_expressions)} expressions, filled {self.population_size - 1 - parsed_count} with evolution")
+
+        return new_population, heritages
+
     def get_well_formed_percentage(self):
         """Get the percentage of neural suggestions that were well-formed"""
         if self.neural_suggestions_total == 0:
             return 0.0
         return (self.neural_suggestions_well_formed / self.neural_suggestions_total) * 100.0
-
-    def save_trajectory(self, filename):
-        """Save the collected trajectory to a JSON file with neural-specific metadata"""
-        if not self.collect_trajectory:
-            raise ValueError("Trajectory collection was not enabled. Set collect_trajectory=True when initializing.")
-
-        os.makedirs('data', exist_ok=True)
-
-        trajectory_data = {
-            'metadata': {
-                'timestamp': datetime.now().isoformat(),
-                'model_type': 'NeuralSR',
-                'model_path': self.model_path,
-                'population_size': self.population_size,
-                'num_generations': self.num_generations,
-                'max_depth': self.max_depth,
-                'max_size': self.max_size,
-                'tournament_size': self.tournament_size,
-                'total_generations_recorded': len(self.trajectory),
-                'neural_suggestions_total': self.neural_suggestions_total,
-                'neural_suggestions_well_formed': self.neural_suggestions_well_formed,
-                'well_formed_percentage': self.get_well_formed_percentage()
-            },
-            'trajectory': self.trajectory
-        }
-
-        filepath = os.path.join('data', filename)
-        with open(filepath, 'w') as f:
-            json.dump(trajectory_data, f, indent=2)
-
-        print(f"Neural trajectory saved to {filepath}")
-        print(f"Well-formed neural suggestions: {self.neural_suggestions_well_formed}/{self.neural_suggestions_total} ({self.get_well_formed_percentage():.1f}%)")
-        return filepath
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@ Shared formatting utilities for neural SR training and inference.
 Ensures consistent formatting between trajectory conversion and model usage.
 """
 import numpy as np
+import math
 from typing import Optional, Dict, Any
 
 
@@ -274,6 +275,50 @@ def format_population_with_fitness(expressions, fitnesses):
     for expr, fitness in zip(expressions, fitnesses):
         # Keep more precision to preserve signal in fitness ordering
         pop_items.append(f"{expr} <FITNESS>{float(fitness):.5f}")
+    return ' '.join(pop_items)
+
+
+def format_sigfigs(value: float, sigfigs: int = 3) -> str:
+    """Format a number to a given number of significant figures.
+
+    Uses Python's general format which trims trailing zeros and switches
+    to scientific notation when appropriate. Returns a compact string
+    representation to minimize token/character footprint.
+
+    Args:
+        value: Numeric value to format
+        sigfigs: Number of significant figures (default: 3)
+
+    Returns:
+        String representation with `sigfigs` significant digits.
+    """
+    try:
+        x = float(value)
+    except Exception:
+        return str(value)
+    if not math.isfinite(x):
+        return str(x)
+    # Using general format ensures minimal length (no trailing zeros)
+    return f"{x:.{sigfigs}g}"
+
+
+def format_population_with_fitness_sigfigs(expressions, fitnesses, sigfigs: int = 3):
+    """Format population with fitness values to N significant figures.
+
+    This is a compact alternative to `format_population_with_fitness` that
+    reduces token/character usage while preserving fitness ordering fidelity.
+
+    Args:
+        expressions: Iterable of expression strings
+        fitnesses: Iterable of numeric fitness values
+        sigfigs: Number of significant figures for fitness values
+
+    Returns:
+        Single string: "expr <FITNESS>value ..." items joined by spaces
+    """
+    pop_items = []
+    for expr, fitness in zip(expressions, fitnesses):
+        pop_items.append(f"{expr} <FITNESS>{format_sigfigs(fitness, sigfigs)}")
     return ' '.join(pop_items)
 
 

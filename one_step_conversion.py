@@ -10,9 +10,10 @@ from pathlib import Path
 from format_utils import format_context, format_population_with_fitness, compute_data_statistics
 import numpy as np
 from tqdm import tqdm
+import math
 
 
-def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic'):
+def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', sample_fraction=1.0, ancestors_only=False):
     """
     Convert BasicSR trajectory file to one-step prediction format.
     Each trajectory becomes multiple training examples (one for each generation transition).
@@ -21,10 +22,15 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
         input_file: Input file with trajectories (.pkl.gz)
         output_file: Output JSONL file
         context_type: 'basic', 'rich', or 'superrich' context level
+        sample_fraction: Fraction of data to sample from input file (default 1.0 = all data)
     """
     # Load data from pickle format
     with gzip.open(input_file, 'rb') as f:
         data = pickle.load(f)
+
+    population_size = data['metadata']['basicsr_params']['population_size']
+    if 1/sample_fraction > population_size:
+        raise ValueError(f"Sample fraction {sample_fraction} too small for population size {population_size} (we need at least one example per generation). Either increase sample fraction or generate fewer/shorter trajectories.")
 
     converted_data = []
 
@@ -73,7 +79,16 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
             target_expressions = next_gen["expressions"]
 
             # Create one training example for each target expression
-            for j, target in enumerate(target_expressions):
+            if sample_fraction < 1.0:
+                k = max(1, math.ceil(sample_fraction * population_size))
+                expressions = random.sample(target_expressions, k)
+            elif ancestors_only:
+                ancestor_ixs = next_gen["ancestors_of_best"]
+                expressions = [target_expressions[i] for i in ancestor_ixs]
+            else:
+                expressions = target_expressions
+
+            for j, target in enumerate(expressions):
                 example = {
                     "context": context_header,
                     "population": population_line,
@@ -141,7 +156,7 @@ def split_train_val(input_file, train_file, val_file, val_split=0.1, seed=42):
     return len(train_data), len(val_data)
 
 
-def convert_and_make_split(input_file, context_type, split=True):
+def convert_and_make_split(input_file, context_type, sample_fraction, split, ancestors_only):
     # Generate output filename from input filename
     input_path = Path(input_file)
     input_filename = input_path.stem  # Remove extension
@@ -152,13 +167,14 @@ def convert_and_make_split(input_file, context_type, split=True):
     output_dir = Path("datasets/training")
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    # Add context_type to the filename
-    output_filename = f"{input_filename}_{context_type}.jsonl"
+    frac_str = f"_{int(sample_fraction*100)}" if sample_fraction < 1.0 else ""
+    anc_str = "_ancs" if ancestors_only else ""
+    output_filename = f"{input_filename}{frac_str}{anc_str}.jsonl"
     output_file = output_dir / output_filename
 
     # Convert trajectories to temporary file
-    print(f"Using {context_type} context type")
-    convert_basicsr_to_one_step_format(input_file, str(output_file), context_type)
+    # print(f"Using {context_type} context type")
+    convert_basicsr_to_one_step_format(input_file, str(output_file), context_type, sample_fraction, ancestors_only)
 
     if split:
         base_name = str(output_file).replace('.jsonl', '')
@@ -173,9 +189,12 @@ def main():
     parser.add_argument("--input", required=True, help="Input trace file (.pkl.gz)")
     parser.add_argument("--context_type", default="basic", choices=["basic", "rich", "superrich"],
                        help="Context type to use: basic (default), rich (with data stats), or superrich (with plot)")
-    parser.add_argument("--no_split", action="store_true", help="If set, do not split into train/val sets")
+    parser.add_argument("--split", action="store_true", help="If set, split into train/val sets")
+    parser.add_argument("--ancestors_only", action="store_true", help="Only include ancestors as training targets")
+    parser.add_argument("--sample_fraction", type=float, default=1.0,
+                        help="Fraction of data to sample from input file (default 1.0 = all data)")
     args = parser.parse_args()
-    convert_and_make_split(args.input, args.context_type, split=not args.no_split)
+    convert_and_make_split(args.input, args.context_type, sample_fraction=args.sample_fraction, split=args.split, ancestors_only=args.ancestors_only)
 
 
 if __name__ == "__main__":

@@ -11,7 +11,7 @@ import argparse
 from utils import get_operators
 
 
-def compare_neural_vs_basic(checkpoint_path, problem_idx=0, save_trajectories=False, sr_params={}):
+def compare_neural_vs_basic(checkpoint_path, problem_idx=0, save_trajectories=False, autoregressive=False, sr_params={}):
     """Compare neural SR vs basic SR on a specific problem"""
     problem = HARDER_PROBLEMS[problem_idx]
     X, y = problem(seed=42)
@@ -19,6 +19,7 @@ def compare_neural_vs_basic(checkpoint_path, problem_idx=0, save_trajectories=Fa
     print(f"=== Comparing Neural vs Basic SR ===")
     print(f"Problem: {problem.__name__}")
     print(f"Description: {problem.__doc__}")
+    print(f"Model type: {'Autoregressive' if autoregressive else 'One-step'}")
 
     # Test BasicSR
     print("\n--- Basic SR ---")
@@ -40,7 +41,7 @@ def compare_neural_vs_basic(checkpoint_path, problem_idx=0, save_trajectories=Fa
     # Test NeuralSR
     print("\n--- Neural SR ---")
     try:
-        neural_sr = NeuralSR(model_path=checkpoint_path, **sr_params)
+        neural_sr = NeuralSR(model_path=checkpoint_path, autoregressive=autoregressive, **sr_params)
 
         start_time = time.time()
         neural_sr.fit(X, y, verbose=True)
@@ -55,15 +56,6 @@ def compare_neural_vs_basic(checkpoint_path, problem_idx=0, save_trajectories=Fa
         print(f"  Expression: {neural_sr.best_model_}")
         print(f"  Size: {neural_sr.best_model_.size()}")
         print(f"  Well-formed suggestions: {neural_sr.neural_suggestions_well_formed}/{neural_sr.neural_suggestions_total} ({neural_sr.get_well_formed_percentage():.1f}%)")
-
-        # Save trajectories if requested
-        if save_trajectories and sr_params.get('collect_trajectory', False):
-            timestamp = time.strftime("%Y%m%d_%H%M%S")
-            basic_trajectory_file = f"basic_sr_trajectory_{problem.__name__}_{timestamp}.json"
-            neural_trajectory_file = f"neural_sr_trajectory_{problem.__name__}_{timestamp}.json"
-
-            basic_sr.save_trajectory(basic_trajectory_file)
-            neural_sr.save_trajectory(neural_trajectory_file)
 
         # Comparison summary
         print(f"\n--- Comparison ---")
@@ -98,12 +90,12 @@ def main():
                        help="Problem index to test (default: 0)")
     parser.add_argument("--collect-trajectories", action="store_true",
                        help="Collect trajectories during evolution")
-    parser.add_argument("--save-trajectories", action="store_true",
-                       help="Save trajectories to files (requires --collect-trajectories)")
     parser.add_argument("--max-generations", type=int, default=1000,
                        help="Maximum number of generations (default: 1000)")
     parser.add_argument("--operator_set", type=str, default="arith", choices=["arith", "full"],
                         help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
+    parser.add_argument("--autoregressive", action="store_true",
+                        help="Use autoregressive model (default: one-step model)")
 
     args = parser.parse_args()
 
@@ -117,13 +109,14 @@ def main():
         'num_generations': args.max_generations,
         'max_depth': 4,
         'max_size': 15,
-        'constants': [1.0]
+        'constants': [1.0],
     }
 
     result = compare_neural_vs_basic(
         args.checkpoint,
         args.problem,
         save_trajectories=args.save_trajectories,
+        autoregressive=args.autoregressive,
         sr_params=sr_params,
     )
     if result:

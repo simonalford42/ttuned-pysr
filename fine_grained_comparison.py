@@ -11,7 +11,7 @@ import argparse
 from utils import get_operators
 
 
-def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[]):
+def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[], autoregressive=False):
     """Compare neural SR vs basic SR generation by generation with user input"""
     problem = HARDER_PROBLEMS[problem_idx]
     X, y = problem(seed=42)
@@ -21,6 +21,7 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
     print(f"Problem: {problem.__name__}")
     print(f"Description: {problem.__doc__}")
     print(f"Data shape: X={X.shape}, y={y.shape}")
+    print(f"Model type: {'Autoregressive' if autoregressive else 'One-step'}")
     print(f"Press Enter after each generation to proceed...\n")
 
     # Initialize both algorithms
@@ -36,6 +37,7 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
     try:
         neural_sr = NeuralSR(
             model_path=checkpoint_path,
+            autoregressive=autoregressive,
             population_size=20,
             num_generations=1,  # We'll run one generation at a time
             max_depth=4,
@@ -84,6 +86,10 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
         print(f"  {basic_individuals_str}")
         basic_best_mse = np.mean((y - basic_best_individual.evaluate(X))**2) if basic_best_individual else float('inf')
         print(f"  Best: {basic_best_individual} (MSE: {basic_best_mse:.6f})")
+        # print sizes of expressions
+        sizes = sorted([ind.size() for ind in basic_population])
+        print(f"  Sizes: {sizes}")
+
 
         print("\nNeural SR individuals:")
         neural_individuals_str = format_individuals_for_display(neural_population)
@@ -91,6 +97,9 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
         neural_best_mse = np.mean((y - neural_best_individual.evaluate(X))**2) if neural_best_individual else float('inf')
         print(f"  Best: {neural_best_individual} (MSE: {neural_best_mse:.6f})")
         print(f"  Well-formed: {neural_sr.neural_suggestions_well_formed}/{neural_sr.neural_suggestions_total}")
+        # print sizes of expressions
+        sizes = sorted([ind.size() for ind in neural_population])
+        print(f"  Sizes: {sizes}")
 
         # Check for early stopping
         if basic_best_mse <= 3e-16 or neural_best_mse <= 3e-16:
@@ -146,6 +155,8 @@ def main():
                        help="Maximum number of generations (default: 1000)")
     parser.add_argument("--operator_set", type=str, default="arith", choices=["arith", "full"],
                         help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
+    parser.add_argument("--autoregressive", action="store_true",
+                        help="Use autoregressive model (default: one-step model)")
 
     args = parser.parse_args()
 
@@ -156,7 +167,8 @@ def main():
         args.problem,
         max_generations=args.max_generations,
         binary_operators=binary_operators,
-        unary_operators=unary_operators
+        unary_operators=unary_operators,
+        autoregressive=args.autoregressive
     )
     if result:
         print("\n✓ Fine-grained comparison completed!")

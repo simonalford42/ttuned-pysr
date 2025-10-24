@@ -18,14 +18,14 @@
 source /home/sca63/mambaforge/etc/profile.d/conda.sh
 conda activate ttsr
 
-# Ensure single-node DDP rendezvous is isolated per job
-export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
-export MASTER_PORT=${MASTER_PORT:-$((29500 + (RANDOM % 1000)))}
+# # Ensure single-node DDP rendezvous is isolated per job
+# export MASTER_ADDR=${MASTER_ADDR:-127.0.0.1}
+# export MASTER_PORT=${MASTER_PORT:-$((29500 + (RANDOM % 1000)))}
 
-# Safer defaults for common single-node clusters without IB
-export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
-export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
-export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker0}
-export TORCH_NCCL_BLOCKING_WAIT=${TORCH_NCCL_BLOCKING_WAIT:-1}
+# # Safer defaults for common single-node clusters without IB
+# export NCCL_DEBUG=${NCCL_DEBUG:-WARN}
+# export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-1}
+# export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-^lo,docker0}
+# export TORCH_NCCL_BLOCKING_WAIT=${TORCH_NCCL_BLOCKING_WAIT:-1}
 
 "$@"

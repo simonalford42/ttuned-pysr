@@ -5,11 +5,12 @@ Inspect a dataset and print examples.
 Usage:
     python inspect_dataset.py <dataset_path> [--n_samples=5]
 
-Supports both expression datasets and trace datasets.
+Supports expression datasets, trace datasets, and one-step training datasets (jsonl).
 """
 import argparse
 import pickle
 import gzip
+import json
 import numpy as np
 
 
@@ -132,23 +133,76 @@ def inspect_trace_dataset(data: dict, n_samples: int = 5, stats_sample_size: int
             print(f"    Best expression: {last_gen['expressions'][np.argmin(last_gen['fitnesses'])]}")
 
 
+def inspect_onestep_dataset(dataset_path: str, n_samples: int = 5):
+    """Inspect a one-step training dataset (jsonl format)."""
+    print("=" * 80)
+    print("ONE-STEP TRAINING DATASET")
+    print("=" * 80)
+
+    # Count total lines
+    with open(dataset_path, 'r') as f:
+        lines = f.readlines()
+
+    total_lines = len(lines)
+    print(f"Total training examples: {total_lines}")
+
+    # Parse a few examples to understand structure
+    if lines:
+        first_example = json.loads(lines[0])
+        print(f"\nStructure:")
+        print(f"  Keys: {list(first_example.keys())}")
+        if 'metadata' in first_example:
+            print(f"  Metadata keys: {list(first_example['metadata'].keys())}")
+
+    # Print examples
+    print(f"\n" + "=" * 80)
+    print(f"EXAMPLES (showing {min(n_samples, total_lines)} of {total_lines})")
+    print("=" * 80)
+
+    for i in range(min(n_samples, total_lines)):
+        example = json.loads(lines[i])
+        print(f"\nExample {i+1}:")
+        print(f"  Context: {example['context']}")
+        print(f"  Target: {example['target']}")
+        if 'metadata' in example:
+            meta = example['metadata']
+            print(f"  Metadata:")
+            print(f"    Target expression: {meta.get('target_expression', 'N/A')}")
+            print(f"    Generation: {meta.get('generation', 'N/A')}")
+            print(f"    Target index: {meta.get('target_index', 'N/A')}")
+
+        # Show a snippet of the population
+        pop = example.get('population', '')
+        if pop:
+            print(f"  Population: {pop}")
+
+
 def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: int = 1000, interactive: bool = False):
     """Load and inspect a dataset, automatically detecting type."""
     print(f"Loading dataset: {dataset_path}\n")
 
-    # Load the dataset
-    with gzip.open(dataset_path, 'rb') as f:
-        data = pickle.load(f)
+    # Check file extension to determine format
+    if dataset_path.endswith('.jsonl'):
+        # One-step training dataset
+        inspect_onestep_dataset(dataset_path, n_samples)
+    elif dataset_path.endswith('.pkl.gz'):
+        # Pickle gzip format (expression or trace dataset)
+        with gzip.open(dataset_path, 'rb') as f:
+            data = pickle.load(f)
 
-    # Detect dataset type
-    if 'expressions' in data:
-        inspect_expression_dataset(data, n_samples)
-    elif 'trajectories' in data:
-        inspect_trace_dataset(data, n_samples, stats_sample_size)
+        # Detect dataset type
+        if 'expressions' in data:
+            inspect_expression_dataset(data, n_samples)
+        elif 'trajectories' in data:
+            inspect_trace_dataset(data, n_samples, stats_sample_size)
+        else:
+            print("ERROR: Unknown dataset format!")
+            print("Expected either 'expressions' or 'trajectories' key in data.")
+            print(f"Found keys: {list(data.keys())}")
     else:
-        print("ERROR: Unknown dataset format!")
-        print("Expected either 'expressions' or 'trajectories' key in data.")
-        print(f"Found keys: {list(data.keys())}")
+        print(f"ERROR: Unsupported file format: {dataset_path}")
+        print("Supported formats: .pkl.gz (pickle gzip), .jsonl (one-step training)")
+        return
 
     # print the structure of the data file
     # from utils import print_structure
@@ -159,8 +213,8 @@ def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: in
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Inspect expression or trace dataset")
-    parser.add_argument("dataset_path", help="Path to the dataset file (.pkl.gz)")
+    parser = argparse.ArgumentParser(description="Inspect expression, trace, or one-step training dataset")
+    parser.add_argument("dataset_path", help="Path to the dataset file (.pkl.gz or .jsonl)")
     parser.add_argument("--n_samples", type=int, default=5,
                         help="Number of examples to show (default: 5)")
     parser.add_argument("--stats_sample_size", type=int, default=50,

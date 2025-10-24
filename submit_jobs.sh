@@ -2,6 +2,10 @@
 
 # 10/16/26
 sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train_one_step.py --config training/configs/onestep-tiny.json
+# sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train_one_step.py --config training/configs/onestep-tiny2.json
+# sbatch -J 10k_conv --partition ellis run_cpu.sh python -u one_step_conversion.py --input datasets/traces/gen10k_arith_1k_c05_20251016_214231.pkl.gz --ancestors_only
+# sbatch -J 10k --partition ellis run_cpu.sh python -u generate_traces.py --expressions_file datasets/expressions/arith_1k_c05_20251016_214231.pkl.gz  --operator_set arith --num_generations 10000
+#
 
 # 10/6/26
 # sbatch -J tiny --partition ellis run.sh python -u train_one_step.py --config training/configs/onestep-tiny.json

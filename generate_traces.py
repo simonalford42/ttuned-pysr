@@ -161,6 +161,7 @@ def generate_traces_from_expressions(expressions_file: str,
             binary_operators=binary_operators,
             unary_operators=unary_operators,
             constants=constants,
+            record_heritage=True,
             **basicsr_params,
         )
 
@@ -188,6 +189,7 @@ def generate_traces_from_expressions(expressions_file: str,
                 'population_size': generation_data['population_size'],
                 'expressions': generation_data['expressions'],  # Keep as list of strings
                 'fitnesses': np.array(generation_data['fitnesses'], dtype=np.float32),  # Convert to numpy array
+                'ancestors_of_best': generation_data['ancestors_of_best'],
             }
             filtered_trajectory.append(filtered_gen)
 
