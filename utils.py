@@ -26,6 +26,23 @@ def load_json(path):
         data = json.load(f)
     return data
 
+def save_json(data, path):
+    with open(path, 'w') as f:
+        json.dump(data, f, indent=4)
+
+def load_jsonl(path):
+    data = []
+    with open(path, 'r') as f:
+        for line in f:
+            if line.strip():
+                data.append(json.loads(line))
+    return data
+
+def save_jsonl(data, path):
+    with open(path, 'w') as f:
+        for entry in data:
+            f.write(json.dumps(entry) + '\n')
+
 
 def freeze_module(model: torch.nn.Module):
     for param in model.parameters():
@@ -78,6 +95,11 @@ def ckpt_path(version, seed=None, glob=False):
 def load_pickle(path):
     with open(path, 'rb') as f:
         data = pickle.load(f)
+    return data
+
+def load_json(path):
+    with open(path, 'r') as f:
+        data = json.load(f)
     return data
 
 

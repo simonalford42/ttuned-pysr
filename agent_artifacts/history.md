@@ -560,3 +560,379 @@ predictions = model.predict(X)
 - Can use same evaluation scripts (`neural_comparison.py`, `fine_grained_comparison.py`)
 - Clean abstraction separates generation logic from core SR algorithm
 
+
+## 2025-10-24: Implemented Batched Neural SR and DAgger Training (Revised)
+
+### Summary
+Implemented batched neural symbolic regression to process multiple expressions simultaneously, and added DAgger-style training data generation as a separate relabeling step.
+
+### New Files Created
+
+**1. batched_neural_sr.py**
+- `BatchedNeuralSR` class for batched processing
+- Processes multiple expressions in parallel
+- Shares neural model across batch members for memory efficiency
+- Returns final models, MSEs, and trajectories for each expression
+- `batched_fit()` convenience function for easy usage
+
+**2. test_batched_sr.py**
+- Test script demonstrating batched neural SR functionality
+- Generates simple test problems (x0+x1, x0*x1, etc.)
+- CLI with configurable parameters
+- Shows batch processing working correctly
+
+**3. dagger_relabel.py**
+- Standalone script for creating DAgger training data
+- Takes neural SR traces and relabels them with expert (BasicSR) actions
+- `relabel_trajectory_with_expert()`: Relabels single trajectory
+- `relabel_traces_with_expert()`: Processes entire traces file
+- Marks output with `dagger: True` and `original_source: "neural_sr"`
+
+### Modified Files
+
+**generate_traces.py**
+- Added `--checkpoint` to use NeuralSR instead of BasicSR
+- Added `--batch_size` for parallel expression processing
+- New helper functions:
+  - `_fit_and_extract_trajectory()`: Shared trajectory extraction
+  - `_process_batched_neural()`: Batched processing
+- Removed integrated DAgger (now separate script)
+
+### How DAgger Works (Two-Step Workflow)
+
+DAgger (Dataset Aggregation) now uses a cleaner two-step approach:
+1. **Generate neural traces**: Run `generate_traces.py` with `--checkpoint` to create traces using neural SR
+2. **Relabel with expert**: Run `dagger_relabel.py` to replay each trajectory and compute what expert (BasicSR) would do at each generation
+
+This creates training data that captures expert behavior on states that the neural model would actually visit during rollout.
+
+**Benefits of two-step approach:**
+- Cleaner separation of concerns
+- Can relabel existing neural traces without regenerating
+- Simpler code maintenance
+- Flexibility to experiment with different relabeling strategies
+
+### Test Results
+
+**Test 1: Normal Neural SR Traces**
+```bash
+python generate_traces.py \
+  --expressions_file datasets/expressions/arith_10_c05_20251016_220146.pkl.gz \
+  --max_expressions 10 --num_generations 10 \
+  --neural_checkpoint training/checkpoints/tiny_221861/checkpoint-210000
+```
+- ✓ Generated 10 traces in 20.2s (avg 2.0s per expression)
+- 4 expressions solved perfectly (MSE=0)
+- Output: 0.03 MB compressed dataset
+
+**Test 2: DAgger-Style Traces (Two-Step Workflow)**
+
+Step 1: Generate neural traces (same as Test 1)
+
+Step 2: Relabel with expert
+```bash
+python dagger_relabel.py \
+  --input datasets/traces/test/gen10_arith_10_c05_20251016_220146.pkl.gz \
+  --output datasets/traces/test/gen10_arith_10_c05_20251016_220146_dagger.pkl.gz
+```
+- ✓ Relabeled 10 traces in ~1s total (very fast)
+- Output marked with `dagger: True` and `original_source: "neural_sr"`
+- Expert (BasicSR) provides optimal actions for neural rollout states
+
+### Key Design Decisions
+
+1. **Model Sharing**: In batched mode, neural model loaded once and shared across batch members
+2. **DAgger Two-Step Workflow**: DAgger is a separate relabeling step rather than integrated into generate_traces.py
+   - Cleaner separation of concerns
+   - Can relabel existing neural traces
+   - Simpler code maintenance
+3. **DAgger Format**: Same format as regular traces, marked with `dagger: True` and `original_source: "neural_sr"`
+4. **Ancestry Tracking**: Both neural and expert modes properly call `update_ancestry_info()` for heritage tracking
+
+### Usage Examples
+
+**Generate traces with neural SR:**
+```bash
+python generate_traces.py \
+  --expressions_file datasets/expressions/arith_1k_c05.pkl.gz \
+  --checkpoint training/checkpoints/tiny_221861/checkpoint-210000 \
+  --population_size 20 --num_generations 50
+```
+
+**Generate traces with batched neural SR:**
+```bash
+python generate_traces.py \
+  --expressions_file datasets/expressions/arith_1k_c05.pkl.gz \
+  --checkpoint training/checkpoints/tiny_221861/checkpoint-210000 \
+  --batch_size 10 --num_generations 50
+```
+
+**Generate DAgger-style traces (two-step):**
+```bash
+# Step 1: Generate neural traces
+python generate_traces.py \
+  --expressions_file datasets/expressions/arith_1k_c05.pkl.gz \
+  --checkpoint training/checkpoints/tiny_221861/checkpoint-210000 \
+  --num_generations 50
+
+# Step 2: Relabel with expert
+python dagger_relabel.py \
+  --input datasets/traces/gen50_arith_1k_c05.pkl.gz \
+  --output datasets/traces/gen50_arith_1k_c05_dagger.pkl.gz
+```
+
+**Test batched SR directly:**
+```bash
+python test_batched_sr.py \
+  --checkpoint training/checkpoints/tiny_221861/checkpoint-210000 \
+  --num_problems 5 --num_generations 100
+```
+
+### Benefits
+
+1. **Efficiency**: Batched processing amortizes model loading overhead
+2. **DAgger Training**: Captures expert behavior on neural rollout states via two-step workflow
+3. **Flexibility**: Same pipeline supports BasicSR, NeuralSR, and batched modes
+4. **Consistent Format**: All modes produce compatible trajectory data
+5. **Separation of Concerns**: DAgger relabeling is independent of trace generation
+
+### Future Work
+
+- Add progress bars for long batch processing
+- Add intermediate checkpointing during batch processing
+- Optimize memory usage for very large batches
+- Experiment with DAgger variants (e.g., mixing neural and expert actions)
+
+
+## 2025-10-24b: Fixed Batched Neural SR to Actually Batch Neural Model Calls
+
+### Summary
+Completely rewrote `batched_neural_sr.py` to properly batch neural model calls. The previous version was incorrectly calling the neural model sequentially for each expression, defeating the purpose of batching.
+
+### Problem Identified
+The original `batched_neural_sr.py` had a loop that called `sr.generate_new_population()` for each expression separately:
+```python
+for i, (X, y, sr, population, fitnesses, ...) in enumerate(...):
+    new_population, heritages = sr.generate_new_population(...)  # Sequential calls!
+```
+
+This meant the neural model was being invoked separately for each expression, providing no batching benefit.
+
+### Solution
+Rewrote the implementation to truly batch the neural model calls:
+
+1. **Batched Input Preparation**: Created all input prompts for the entire batch at once
+   ```python
+   input_texts = []
+   for population, fitnesses, num_vars in zip(populations, fitnesses_batch, num_vars_list):
+       input_text = format_inference_input(...)
+       input_texts.append(input_text)
+   ```
+
+2. **Batched Tokenization**: Tokenized all inputs together with padding
+   ```python
+   inputs = tokenizer(input_texts, return_tensors="pt", padding=True, truncation=True)
+   ```
+
+3. **Single Batched Model Call**: One call generates for all expressions
+   ```python
+   outputs = model.generate(
+       **inputs,
+       num_return_sequences=num_to_generate  # batch_size * num_to_generate total
+   )
+   ```
+
+4. **Batched Output Processing**: Processed outputs for each expression from single generation result
+
+### Key Implementation Details
+
+- **Model sharing**: Single NeuralSR template loads model once, shared across batch
+- **Output reshaping**: `outputs` has shape `(batch_size * num_to_generate, seq_len)`, need to group by expression
+- **Per-expression tracking**: Each expression maintains its own trajectory, best individual, and fitness tracking
+- **Autoregressive restriction**: Only supports one-step models (autoregressive doesn't batch well)
+
+### Test Script Updates
+
+Updated `test_batched_sr.py` to include:
+- `--compare_sequential` flag to run both batched and sequential versions
+- Performance comparison with timing and speedup calculation
+- Side-by-side results comparison
+
+### Expected Performance Benefits
+
+- **Model loading**: Load once instead of N times
+- **GPU utilization**: Single batched inference is more efficient than N sequential inferences
+- **Memory efficiency**: Share model weights across batch members
+- **Tokenization**: Tokenize all inputs at once with batched padding
+
+### Usage Example
+
+```bash
+# Test batched vs sequential
+python test_batched_sr.py \
+  --checkpoint training/checkpoints/tiny_221861/checkpoint-210000 \
+  --num_problems 3 \
+  --num_generations 10 \
+  --compare_sequential
+```
+
+### Notes
+
+- Only supports one-step models (not autoregressive) for true batching
+- Batching happens at the neural model level during generation
+- Each expression still has independent populations and evolution tracking
+- The implementation properly creates a single batched model.generate() call per generation instead of batch_size separate calls
+
+
+## 2025-10-29: Added Expression ID References to Training Format for Input Embeddings
+
+### Summary
+Modified the training data pipeline to use expression ID references instead of storing full X, y data inline, achieving 9-10x file size reduction while enabling end-to-end input embeddings.
+
+### Changes Made
+
+**1. Created E2EPointEmbedder** (`point_embedder.py`)
+- Simple 2-layer MLP architecture for embedding (X, y) data points
+- Takes X (batch_size, num_points, num_vars) and y (batch_size, num_points) as inputs
+- Pads/truncates to fixed sizes: max_points=64, max_input_dim=10
+- Outputs embeddings of shape (batch_size, 64, hidden_size)
+- Much smaller than original PointEmbedder: 268K params vs 29M params
+- Designed to prepend as prefix to decoder model input
+
+**2. Updated generate_traces.py**
+- Added `expression_id` field to each trajectory
+- Both sequential and batched processing now include expression IDs
+- Expression ID taken from source expressions file (0-indexed)
+- Metadata includes `source_expressions_file` path for reference
+
+**3. Updated one_step_conversion.py**
+- Store `expression_id` instead of full X, y arrays
+- Add `source_expressions_file` to metadata for each example
+- Training loader will use expression_id to look up X, y from expressions file
+- Format: `{"context": ..., "population": ..., "target": ..., "expression_id": 8, "metadata": {"source_expressions_file": "..."}}`
+
+**4. File Size Comparison**
+Tested with same 10 expressions, 100 generations, 17,820 training examples:
+
+| Format | Training File Size | Avg Example Size | Reduction |
+|--------|-------------------|------------------|-----------|
+| With inline X, y | 220 MB | 12,361 bytes | 1x (baseline) |
+| With expression_id | 22 MB | 1,308 bytes | **9.4x smaller** |
+
+**Size Analysis:**
+- Expression ID is just a small integer reference
+- Metadata adds ~60 bytes for source file path
+- X, y data is loaded on-demand during training from expressions file
+- Disk I/O reduced by ~90%
+
+### Architecture
+
+```
+expressions file (datasets/expressions/*.pkl.gz)
+└── { "expressions": [ {"id": 0, "X_data": [...], "y_data": [...]}, ... ] }
+
+trace file (datasets/traces/*.pkl.gz)
+└── { "trajectories": [ {"expression_id": 0, ...}, ... ] }
+
+training file (datasets/training/*.jsonl)
+└── { "expression_id": 0, "metadata": {"source_expressions_file": "..."}, ... }
+
+During training:
+1. Load training example → get expression_id
+2. Look up X, y from expressions file using ID
+3. Pass through E2EPointEmbedder
+4. Prepend embeddings to model input
+```
+
+### Benefits
+- **Storage**: 9-10x smaller training files
+- **I/O**: Faster data loading (smaller files to read)
+- **Deduplication**: X, y stored once in expressions file, referenced many times
+- **Flexibility**: Can update expressions file without regenerating all training data
+- **Clean architecture**: Clear separation between data and training examples
+
+### Integration into Training (train_one_step.py)
+
+**1. Model Wrapper**
+- Created `ModelWithInputEmbedder` class to combine base LM and embedder
+- Wrapper exposes same interface as base model for Trainer compatibility
+- Both components trained together end-to-end
+
+**2. Config Flag**
+- Added `"input_embedder"` config parameter
+- Supported values: `"e2e"` (E2EPointEmbedder) or `null` (no embedder)
+- Example: `{"input_embedder": "e2e"}` in training config
+
+**3. Custom Data Collator**
+- `InputEmbeddingCollator` loads X, y from expression files on-the-fly
+- Caches loaded expression files for efficiency
+- Computes embeddings and prepends to token embeddings
+- Creates `inputs_embeds` by concatenating [prefix_embeds, token_embeds]
+- Adjusts labels to add 64 positions of -100 for prefix (no loss on embeddings)
+
+**4. Modified Tokenization**
+- Preserves `expression_id` and `source_expressions_file` in tokenized data
+- Only when using embedder (normal mode unchanged)
+
+**5. Training Flow**
+```
+1. Load training example → extract expression_id
+2. Collator loads X, y from expressions file using ID
+3. Embedder: (X, y) → (64, hidden_size) embeddings
+4. Concatenate [embeddings | token_embeddings]
+5. Forward pass with inputs_embeds
+6. Gradients flow back through both embedder and LM
+```
+
+### Next Steps
+1. Test integration with small dataset
+2. Implement prefix-LM style masking for bidirectional attention on embeddings
+3. Create test script to verify embeddings work end-to-end on simple problem
+4. Train full model and evaluate performance
+
+## 2025-10-27: Fixed Ancestry Info Tracking in Batched Neural SR
+
+### Summary
+Fixed `KeyError: 'ancestors_of_best'` when using batched neural SR with `generate_traces.py` by adding ancestry tracking to `BatchedNeuralSR.batched_fit()`.
+
+### Problem
+When running `generate_traces.py` with `--batch_size`, the script failed with:
+```
+KeyError: 'ancestors_of_best'
+```
+
+The issue was that `BatchedNeuralSR.batched_fit()` wasn't calling `update_ancestry_info()` to populate the `ancestors_of_best` field in trajectories, but `generate_traces.py` expected this field to exist.
+
+### Solution
+1. **Extracted ancestry logic into static method**: Created `BasicSR._add_ancestry_info_to_trajectory()` as a static method that can be reused by both `BasicSR` and `BatchedNeuralSR`
+
+2. **Refactored BasicSR.update_ancestry_info()**: Modified to use the new static method internally, maintaining backward compatibility
+
+3. **Added ancestry tracking to BatchedNeuralSR**: Updated `batched_fit()` to call `BasicSR._add_ancestry_info_to_trajectory()` for each trajectory after evolution completes
+
+### Implementation Details
+- `BasicSR._add_ancestry_info_to_trajectory(trajectory)`: Static method that adds `ancestors_of_best` field to each generation in a trajectory
+- Tracks backward from final generation (best at index 0) through heritage graph
+- Maintains deterministic ordering of ancestor indices
+- Reusable by any class that generates trajectories with heritage tracking
+
+### Testing
+Successfully tested with:
+```bash
+python generate_traces.py \
+  --expressions_file datasets/expressions/arith_50_c05_20251023_215035.pkl.gz \
+  --num_generations 100 \
+  --checkpoint training/checkpoints/tiny_208822/final_model \
+  --batch_size 4
+```
+
+- ✓ Processed 50 expressions in 13 batches (227.9s total)
+- ✓ No KeyError for 'ancestors_of_best'
+- ✓ Generated valid trace file with ancestry info
+- ✓ All trajectories include proper `ancestors_of_best` tracking
+
+### Code Quality Improvements
+- Eliminated code duplication by creating shared static method
+- Both `BasicSR` and `BatchedNeuralSR` now use the same ancestry tracking logic
+- Clean separation of concerns: static method is pure function that operates on trajectory data
+

@@ -12,6 +12,7 @@ import pickle
 import gzip
 import json
 import numpy as np
+from utils import load_jsonl
 
 
 def inspect_expression_dataset(data: dict, n_samples: int = 5):
@@ -183,6 +184,7 @@ def inspect_dataset(dataset_path: str, n_samples: int = 5, stats_sample_size: in
 
     # Check file extension to determine format
     if dataset_path.endswith('.jsonl'):
+        data = load_jsonl(dataset_path)
         # One-step training dataset
         inspect_onestep_dataset(dataset_path, n_samples)
     elif dataset_path.endswith('.pkl.gz'):

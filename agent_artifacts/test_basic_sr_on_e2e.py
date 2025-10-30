@@ -25,7 +25,7 @@ repo_dir = _ensure_local_paths()
 # Import from main codebase
 sys.path.insert(0, os.path.join(repo_dir, ".."))
 from generate_expressions import E2EDataGenerator
-from basic_sr import BasicSR
+from sr import BasicSR
 
 
 def main(n: int = 10, seed: int = 0):

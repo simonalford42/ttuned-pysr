@@ -3,7 +3,7 @@ Test script for autoregressive NeuralSR model.
 Tests the autoreg=True functionality with a trained checkpoint.
 """
 import numpy as np
-from basic_sr import NeuralSR
+from sr import NeuralSR
 from problems import ULTRA_SIMPLE_PROBLEMS
 
 def test_autoreg_model(checkpoint_path="training/checkpoints/tiny_218153/checkpoint-50000"):

@@ -7,9 +7,11 @@ import json
 import os
 import random
 from typing import Dict, Any
-
+import pickle
+import gzip
 
 import torch
+import numpy as np
 from accelerate import Accelerator
 from datasets import load_dataset
 from transformers import AutoTokenizer, AutoConfig, AutoModelForCausalLM
@@ -20,11 +22,29 @@ from transformers import TrainingArguments
 import wandb
 from format_utils import format_input_part, format_target_part
 from datetime import datetime
+from point_embedder import E2EPointEmbedder
 
 
-def main(args):
+class ModelWithInputEmbedder(torch.nn.Module):
+    """Wrapper that combines a language model with an input embedder"""
+    def __init__(self, base_model, input_embedder):
+        super().__init__()
+        self.base_model = base_model
+        self.input_embedder = input_embedder
+        # Expose config for Trainer
+        self.config = base_model.config
+
+    def forward(self, inputs_embeds=None, labels=None, **kwargs):
+        """Forward pass - expects inputs_embeds from collator"""
+        return self.base_model(inputs_embeds=inputs_embeds, labels=labels, **kwargs)
+
+    def generate(self, **kwargs):
+        return self.base_model.generate(**kwargs)
+
+
+def main(config, checkpoint=None, resume=False, reset=False):
     # read config from a json config file
-    with open(args.config, "r") as f:
+    with open(config, "r") as f:
         config = json.load(f)
 
     # set seeds
@@ -57,9 +77,9 @@ def main(args):
     # Build model/tokenizer: either from pretrained (reset) or from config (fresh)
     default_pretrained = config.get("model_name_or_path", "cerebras/Cerebras-GPT-256M")
 
-    if getattr(args, "reset", False):
+    if reset:
         # Fine-tune from a pretrained checkpoint or HF Hub model
-        source = args.ckpt or default_pretrained
+        source = checkpoint or default_pretrained
         print(f"Loading pretrained model/tokenizer from: {source}")
         tokenizer = AutoTokenizer.from_pretrained(source, use_fast=True, trust_remote_code=True)
         model = AutoModelForCausalLM.from_pretrained(source)
@@ -85,12 +105,37 @@ def main(args):
         ]
     }
     num_added_tokens = tokenizer.add_special_tokens(special_tokens)
-    model.resize_token_embeddings(len(tokenizer))
+    model.base_model.resize_token_embeddings(len(tokenizer))
 
     # Precision will be controlled by TrainingArguments/Accelerate; avoid manual casting here
 
     print(f"Number of parameters: {model.num_parameters()}")
     print(f"Added {num_added_tokens} special tokens")
+
+    # Initialize input embedder if specified
+    input_embedder_type = config.get("input_embedder", None)
+    input_embedder = None
+    expressions_data_cache = {}
+
+    if input_embedder_type == "e2e":
+        print("Initializing E2E input embedder...")
+        hidden_size = model.config.hidden_size
+        input_embedder = E2EPointEmbedder(
+            max_points=64,
+            max_input_dim=10,
+            hidden_size=hidden_size,
+            mlp_hidden_size=512,
+        )
+        num_embedder_params = sum(p.numel() for p in input_embedder.parameters())
+        print(f"Input embedder parameters: {num_embedder_params:,}")
+
+        # Wrap model with embedder
+        base_model = model
+        model = ModelWithInputEmbedder(base_model, input_embedder)
+        print(f"Wrapped model with input embedder")
+        print(f"Total parameters (model + embedder): {model.base_model.num_parameters() + num_embedder_params:,}")
+    elif input_embedder_type is not None:
+        raise ValueError(f"Unknown input_embedder type: {input_embedder_type}")
 
     # load dataset - our training-ready format
     train_file = os.path.join(config["data_dir"], config["train_file"])
@@ -137,7 +182,8 @@ def main(args):
         """
         input_ids_list = []
         labels_list = []
-
+        expression_ids = []
+        source_files = []
 
         for i in range(len(element["context"])):
             context = element["context"][i]
@@ -179,10 +225,22 @@ def main(args):
             input_ids_list.append(full_input_ids)
             labels_list.append(labels)
 
-        return {
+            # Keep expression_id and source file if using embedder
+            if input_embedder is not None:
+                expression_ids.append(element["expression_id"][i] if "expression_id" in element else -1)
+                source_files.append(element["metadata"][i].get("source_expressions_file", "") if "metadata" in element else "")
+
+        result = {
             "input_ids": torch.tensor(input_ids_list),
             "labels": torch.tensor(labels_list),
         }
+
+        # Add expression metadata if using embedder
+        if input_embedder is not None:
+            result["expression_id"] = expression_ids
+            result["source_expressions_file"] = source_files
+
+        return result
 
     # tokenize dataset
     map_num_proc = config.get("map_num_proc", None)
@@ -196,10 +254,89 @@ def main(args):
 
     # Length distribution debug code removed per request.
 
-    # Use a simple collator that preserves our precomputed labels
-    # (DataCollatorForLanguageModeling would overwrite labels for causal LM)
-    from transformers import default_data_collator
-    data_collator = default_data_collator
+    # Create data collator
+    if input_embedder is not None:
+        # Custom collator that handles input embeddings
+        class InputEmbeddingCollator:
+            def __init__(self, model_wrapper, tokenizer, expressions_cache):
+                self.model_wrapper = model_wrapper  # ModelWithInputEmbedder instance
+                self.tokenizer = tokenizer
+                self.expressions_cache = expressions_cache  # Cache loaded expression files
+
+            def load_expressions_file(self, filepath):
+                """Load and cache expressions file"""
+                if filepath not in self.expressions_cache:
+                    with gzip.open(filepath, 'rb') as f:
+                        data = pickle.load(f)
+                    # Index by expression ID for fast lookup
+                    self.expressions_cache[filepath] = {
+                        expr['id']: (expr['X_data'], expr['y_data'])
+                        for expr in data['expressions']
+                    }
+                return self.expressions_cache[filepath]
+
+            def __call__(self, features):
+                # Collate regular features
+                batch = {
+                    "input_ids": torch.stack([torch.tensor(f["input_ids"]) for f in features]),
+                    "labels": torch.stack([torch.tensor(f["labels"]) for f in features]),
+                }
+
+                # Load X, y data and compute embeddings
+                if "expression_id" in features[0]:
+                    X_batch = []
+                    y_batch = []
+
+                    for f in features:
+                        expr_id = f["expression_id"]
+                        source_file = f["source_expressions_file"]
+
+                        # Load expressions data
+                        expressions_data = self.load_expressions_file(source_file)
+                        X, y = expressions_data[expr_id]
+
+                        X_batch.append(torch.from_numpy(X))
+                        y_batch.append(torch.from_numpy(y))
+
+                    # Pad X, y to same length within batch
+                    max_points = max(X.shape[0] for X in X_batch)
+                    max_vars = max(X.shape[1] for X in X_batch)
+
+                    X_padded = torch.zeros(len(X_batch), max_points, max_vars)
+                    y_padded = torch.zeros(len(y_batch), max_points)
+
+                    for i, (X, y) in enumerate(zip(X_batch, y_batch)):
+                        n_points, n_vars = X.shape
+                        X_padded[i, :n_points, :n_vars] = X
+                        y_padded[i, :n_points] = y
+
+                    # Compute embeddings: (batch_size, 64, hidden_size)
+                    # NOTE: No torch.no_grad() here - we want gradients to flow!
+                    prefix_embeds = self.model_wrapper.input_embedder(X_padded, y_padded)
+
+                    # Get token embeddings: (batch_size, seq_len, hidden_size)
+                    token_embeds = self.model_wrapper.base_model.get_input_embeddings()(batch["input_ids"])
+
+                    # Concatenate: [prefix_embeds, token_embeds]
+                    # Result: (batch_size, 64 + seq_len, hidden_size)
+                    batch["inputs_embeds"] = torch.cat([prefix_embeds, token_embeds], dim=1)
+
+                    # Adjust labels to account for prefix (add 64 positions of -100)
+                    prefix_labels = torch.full((len(features), 64), -100, dtype=torch.long)
+                    batch["labels"] = torch.cat([prefix_labels, batch["labels"]], dim=1)
+
+                    # Remove input_ids since we're using inputs_embeds
+                    del batch["input_ids"]
+
+                return batch
+
+        data_collator = InputEmbeddingCollator(model, tokenizer, expressions_data_cache)
+        print("Using custom InputEmbeddingCollator")
+    else:
+        # Use simple collator that preserves our precomputed labels
+        from transformers import default_data_collator
+        data_collator = default_data_collator
+        print("Using default_data_collator")
 
     print("tokenized dataset", tokenized_datasets)
 
@@ -208,7 +345,7 @@ def main(args):
 
     # Check if output directory exists and create a shared, deterministic suffix across ranks
     output_dir = training_config["output_dir"]
-    if os.path.exists(output_dir) and not getattr(args, "resume", False):
+    if os.path.exists(output_dir) and not resume:
         # Prefer SLURM_JOB_ID to ensure same suffix across all ranks
         shared_id = os.environ.get("SLURM_JOB_ID", None)
         run_id_file = f"{output_dir}.run_id"
@@ -288,13 +425,13 @@ def main(args):
     )
 
     print("Starting training...")
-    if getattr(args, "resume", False):
-        if not args.ckpt:
-            print("--resume was set but --ckpt not provided; starting fresh training.")
+    if resume:
+        if not checkpoint:
+            print("--resume was set but --checkpoint not provided; starting fresh training.")
             trainer.train()
         else:
-            print(f"Resuming from checkpoint: {args.ckpt}")
-            trainer.train(resume_from_checkpoint=args.ckpt)
+            print(f"Resuming from checkpoint: {checkpoint}")
+            trainer.train(resume_from_checkpoint=checkpoint)
     else:
         trainer.train()
 
@@ -310,9 +447,9 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", type=str, help="Path to config file", default='training/onestep-s.json')
     parser.add_argument("--resume", action="store_true", help="Resume training from a checkpoint path")
-    parser.add_argument("--ckpt", type=str, default=None, help="Checkpoint directory to resume from")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint directory to resume from")
     parser.add_argument("--reset", action="store_true", help="Initialize model weights from a pretrained checkpoint for fine-tuning")
 
     args = parser.parse_args()
 
-    main(args)
+    main(config=args.config, checkpoint=args.checkpoint, resume=args.resume, reset=args.reset)

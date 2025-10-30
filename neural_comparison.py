@@ -5,7 +5,7 @@ Tests loading a trained checkpoint and running neural evolution.
 
 import numpy as np
 import time
-from basic_sr import BasicSR, NeuralSR
+from sr import BasicSR, NeuralSR
 from problems import HARDER_PROBLEMS
 import argparse
 from utils import get_operators

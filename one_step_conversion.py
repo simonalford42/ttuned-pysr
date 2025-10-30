@@ -34,6 +34,9 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
 
     converted_data = []
 
+    # Get source expressions file from metadata (for loading X, y later during training)
+    source_expressions_file = data['metadata'].get('source_expressions_file', None)
+
     # Extract trajectories from current format
     trajectories = data['trajectories']
 
@@ -41,6 +44,7 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
     for traj in tqdm(trajectories):
         trajectory_data = traj['trajectory']
         target_expr = traj['target_expression']
+        expression_id = traj.get('expression_id', None)  # Get expression ID if available
 
         # Extract operators and constants from trajectory
         binary_operators = sorted(traj['binary_operators'])
@@ -93,10 +97,12 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
                     "context": context_header,
                     "population": population_line,
                     "target": target,
+                    "expression_id": expression_id,  # Store ID reference instead of full X, y data
                     "metadata": {
                         "target_expression": target_expr,
                         "generation": current_gen["generation"],
-                        "target_index": j
+                        "target_index": j,
+                        "source_expressions_file": source_expressions_file  # Add reference to source file
                     }
                 }
                 converted_data.append(example)

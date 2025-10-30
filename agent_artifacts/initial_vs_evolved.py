@@ -3,7 +3,7 @@ import random
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS
 
 # Import the Node class and BasicSR from the updated file
-from basic_sr import Node, BasicSR
+from sr import Node, BasicSR
 
 
 def test_initial_vs_evolved():

@@ -5,7 +5,7 @@ Compares generation by generation with user input to proceed.
 
 import numpy as np
 import time
-from basic_sr import BasicSR, NeuralSR
+from sr import BasicSR, NeuralSR
 from problems import HARDER_PROBLEMS
 import argparse
 from utils import get_operators

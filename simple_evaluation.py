@@ -7,7 +7,7 @@ import numpy as np
 import time
 import json
 from datetime import datetime
-from basic_sr import BasicSR, NeuralSR
+from sr import BasicSR, NeuralSR
 from problems import HARDER_PROBLEMS
 import argparse
 from concurrent.futures import ThreadPoolExecutor

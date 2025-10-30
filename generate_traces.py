@@ -9,8 +9,8 @@ import os
 import time
 import numpy as np
 from datetime import datetime
-from typing import List, Dict, Any
-from basic_sr import BasicSR
+from typing import List, Dict, Any, Tuple
+from sr import BasicSR, NeuralSR
 import random
 import sympy as sp
 from utils import get_operators
@@ -28,9 +28,6 @@ def load_expressions_dataset(filepath: str) -> List[Dict[str, Any]]:
 
     expressions = data['expressions']
     metadata = data['metadata']
-
-    print(f"Loaded {len(expressions)} expressions from {filepath}")
-    print(f"Generated with: {metadata.get('parameters', {})}")
 
     return expressions, metadata
 
@@ -92,18 +89,163 @@ def get_data_from_expr(expr_data: Dict[str, Any], seed: int = 42):
     return X, y
 
 
+def _fit_and_extract_trajectory(model, X, y, expr_str, expr_id, basicsr_params,
+                                binary_operators, unary_operators, constants):
+    """Fit model and extract trajectory data"""
+    # Fit and collect trajectory
+    start_time = time.time()
+    model.fit(X, y)
+    actual_time = time.time() - start_time
+
+    # Get final results
+    if model.best_model_:
+        y_pred = model.predict(X)
+        final_mse = float(np.mean((y - y_pred)**2))
+        final_expression = str(model.best_model_)
+    else:
+        final_mse = float('inf')
+        final_expression = None
+
+    print(f"Completed: {len(model.trajectory)} generations, MSE={final_mse:.2e}, time={actual_time:.1f}s")
+
+    # Store trajectory data with numpy arrays (use float32 for smaller size)
+    filtered_trajectory = []
+    for generation_data in model.trajectory:
+        filtered_gen = {
+            'generation': generation_data['generation'],
+            'population_size': generation_data['population_size'],
+            'expressions': generation_data['expressions'],  # Keep as list of strings
+            'fitnesses': np.array(generation_data['fitnesses'], dtype=np.float32),  # Convert to numpy array
+            'ancestors_of_best': generation_data['ancestors_of_best'],
+        }
+        filtered_trajectory.append(filtered_gen)
+
+    trajectory_data = {
+        'expression_id': int(expr_id),  # Add expression ID for reference
+        'target_expression': expr_str,
+        'final_mse': np.float32(final_mse),
+        'final_expression': final_expression,
+        'trajectory': filtered_trajectory,
+        # Store basicsr_params per trajectory
+        'basicsr_params': {
+            'population_size': basicsr_params['population_size'],
+            'num_generations': basicsr_params['num_generations'],
+            'max_depth': basicsr_params['max_depth'],
+            'max_size': basicsr_params['max_size'],
+            'tournament_size': basicsr_params['tournament_size'],
+        },
+        # Store operators and constants per trajectory
+        'binary_operators': binary_operators,
+        'unary_operators': unary_operators,
+        'constants': constants,
+        # Store X_data and y_data for the expression
+        'X_data': X.astype(np.float32),
+        'y_data': y.astype(np.float32),
+    }
+
+    return trajectory_data
+
+
+def _process_batched_neural(expressions, checkpoint, basicsr_params,
+                            binary_operators, unary_operators, constants,
+                            batch_size, seed):
+    """Process expressions in batches using batched neural SR"""
+    from sr import BatchedNeuralSR
+
+    all_trajectories = []
+
+    # Create batched neural SR instance
+    batched_sr = BatchedNeuralSR(
+        model_path=checkpoint,
+        binary_operators=binary_operators,
+        unary_operators=unary_operators,
+        constants=constants,
+        **basicsr_params
+    )
+
+    # Process in batches
+    for batch_start in range(0, len(expressions), batch_size):
+        batch_end = min(batch_start + batch_size, len(expressions))
+        batch_exprs = expressions[batch_start:batch_end]
+
+        print(f"\n=== Processing batch {batch_start//batch_size + 1}: expressions {batch_start+1}-{batch_end} ===")
+
+        # Prepare batch data
+        X_batch = []
+        y_batch = []
+        expr_strs = []
+        expr_ids = []
+
+        for expr_data in batch_exprs:
+            X, y = get_data_from_expr(expr_data, seed=seed)
+            X_batch.append(X)
+            y_batch.append(y)
+            expr_strs.append(expr_data['expression'])
+            expr_ids.append(expr_data['id'])
+
+        # Run batched fit
+        final_models, final_mses, trajectories = batched_sr.batched_fit(
+            X_batch, y_batch
+        )
+
+        # Extract trajectory data for each expression in batch
+        for i, (expr_id, expr_str, X, y, final_model, final_mse, trajectory) in enumerate(
+            zip(expr_ids, expr_strs, X_batch, y_batch, final_models, final_mses, trajectories)
+        ):
+            # Convert trajectory to storage format
+            filtered_trajectory = []
+            for generation_data in trajectory:
+                filtered_gen = {
+                    'generation': generation_data['generation'],
+                    'population_size': generation_data['population_size'],
+                    'expressions': generation_data['expressions'],
+                    'fitnesses': np.array(generation_data['fitnesses'], dtype=np.float32),
+                    'ancestors_of_best': generation_data['ancestors_of_best'],
+                }
+                filtered_trajectory.append(filtered_gen)
+
+            trajectory_data = {
+                'expression_id': int(expr_id),  # Add expression ID for reference
+                'target_expression': expr_str,
+                'final_mse': np.float32(final_mse),
+                'final_expression': str(final_model),
+                'trajectory': filtered_trajectory,
+                'basicsr_params': {
+                    'population_size': basicsr_params['population_size'],
+                    'num_generations': basicsr_params['num_generations'],
+                    'max_depth': basicsr_params['max_depth'],
+                    'max_size': basicsr_params['max_size'],
+                    'tournament_size': basicsr_params['tournament_size'],
+                },
+                'binary_operators': binary_operators,
+                'unary_operators': unary_operators,
+                'constants': constants,
+                'X_data': X.astype(np.float32),
+                'y_data': y.astype(np.float32),
+            }
+
+            all_trajectories.append(trajectory_data)
+
+    return all_trajectories
+
+
 def generate_traces_from_expressions(expressions_file: str,
                                    output_dir: str = "datasets/traces",
                                    basicsr_params: Dict[str, Any] = None,
                                    max_expressions: int = None,
                                    seed: int = 42,
                                    operator_set: str = "full",
-                                   constants: List[float] = None) -> str:
+                                   constants: List[float] = None,
+                                   checkpoint: str = None,
+                                   batch_size: int = 1,
+                                   output_file: str = None) -> str:
     """Generate BasicSR traces from expression dataset
 
     Args:
         operator_set: Either "full" (all operators) or "arith" (add/sub/mul only)
         constants: List of constants to use (if None uses constants from expression generation)
+        checkpoint: Path to neural model checkpoint for NeuralSR (if None, uses BasicSR)
+        batch_size: Number of expressions to process in parallel (only used with checkpoint)
     """
 
     binary_operators, unary_operators = get_operators(operator_set)
@@ -127,8 +269,9 @@ def generate_traces_from_expressions(expressions_file: str,
 
     # Limit number of expressions if specified
     if max_expressions:
-        expressions = expressions[:max_expressions]
-        print(f"Limited to first {max_expressions} expressions")
+        # expressions = expressions[:max_expressions]
+        expressions = random.sample(expressions, max_expressions)
+        print(f"Limiting to {max_expressions} expressions")
 
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
@@ -138,84 +281,66 @@ def generate_traces_from_expressions(expressions_file: str,
     print(f"BasicSR parameters: {basicsr_params}")
     print(f"Operator set: {operator_set} (binary: {binary_operators}, unary: {unary_operators})")
     print(f"Constants: {constants}")
+    if checkpoint:
+        print(f"Checkpoint: {checkpoint}")
+        print(f"Batch size: {batch_size}")
 
-    for i, expr_data in enumerate(expressions):
-        expr_id = expr_data['id']
-        expr_str = expr_data['expression']
-
-        print(f"\nProcessing expression {i+1}/{len(expressions)}: ID={expr_id}")
-        print(f"Expression: {expr_str}")
-
-        # Get data (uses pre-generated if available, otherwise generates)
-        X, y = get_data_from_expr(expr_data, seed=seed)
-        print(f"Data shape: X={X.shape}, y range=[{y.min():.3f}, {y.max():.3f}]")
-
-        # Seed BasicSR stochasticity for reproducibility (vary by expression)
-        run_seed = seed + int(expr_id)
-        random.seed(run_seed)
-        np.random.seed(run_seed)
-
-        # Run BasicSR with trajectory collection
-        model = BasicSR(
-            collect_trajectory=True,
-            binary_operators=binary_operators,
-            unary_operators=unary_operators,
-            constants=constants,
-            record_heritage=True,
-            **basicsr_params,
+    # Process expressions in batches if using neural SR
+    if checkpoint and batch_size > 1:
+        all_trajectories = _process_batched_neural(
+            expressions, checkpoint, basicsr_params,
+            binary_operators, unary_operators, constants,
+            batch_size, seed
         )
+    else:
+        # Process one at a time
+        for i, expr_data in enumerate(expressions):
+            expr_id = expr_data['id']
+            expr_str = expr_data['expression']
 
-        # Fit and collect trajectory
-        start_time = time.time()
-        model.fit(X, y)
-        actual_time = time.time() - start_time
+            print(f"\nProcessing expression {i+1}/{len(expressions)}: ID={expr_id}")
+            print(f"Expression: {expr_str}")
 
-        # Get final results
-        if model.best_model_:
-            y_pred = model.predict(X)
-            final_mse = float(np.mean((y - y_pred)**2))
-            final_expression = str(model.best_model_)
-        else:
-            final_mse = float('inf')
-            final_expression = None
+            # Get data (uses pre-generated if available, otherwise generates)
+            X, y = get_data_from_expr(expr_data, seed=seed)
+            print(f"Data shape: X={X.shape}, y range=[{y.min():.3f}, {y.max():.3f}]")
 
-        print(f"Completed: {len(model.trajectory)} generations, MSE={final_mse:.2e}, time={actual_time:.1f}s")
+            # Seed BasicSR stochasticity for reproducibility (vary by expression)
+            run_seed = seed + int(expr_id)
+            random.seed(run_seed)
+            np.random.seed(run_seed)
 
-        # Store trajectory data with numpy arrays (use float32 for smaller size)
-        filtered_trajectory = []
-        for generation_data in model.trajectory:
-            filtered_gen = {
-                'generation': generation_data['generation'],
-                'population_size': generation_data['population_size'],
-                'expressions': generation_data['expressions'],  # Keep as list of strings
-                'fitnesses': np.array(generation_data['fitnesses'], dtype=np.float32),  # Convert to numpy array
-                'ancestors_of_best': generation_data['ancestors_of_best'],
-            }
-            filtered_trajectory.append(filtered_gen)
+            # Use NeuralSR if checkpoint provided, otherwise BasicSR
+            if checkpoint:
+                model = NeuralSR(
+                    model_path=checkpoint,
+                    collect_trajectory=True,
+                    binary_operators=binary_operators,
+                    unary_operators=unary_operators,
+                    constants=constants,
+                    record_heritage=True,
+                    **basicsr_params,
+                )
+                trajectory_data = _fit_and_extract_trajectory(
+                    model, X, y, expr_str, expr_id, basicsr_params,
+                    binary_operators, unary_operators, constants
+                )
+            else:
+                # Run BasicSR with trajectory collection
+                model = BasicSR(
+                    collect_trajectory=True,
+                    binary_operators=binary_operators,
+                    unary_operators=unary_operators,
+                    constants=constants,
+                    record_heritage=True,
+                    **basicsr_params,
+                )
+                trajectory_data = _fit_and_extract_trajectory(
+                    model, X, y, expr_str, expr_id, basicsr_params,
+                    binary_operators, unary_operators, constants
+                )
 
-        trajectory_data = {
-            'target_expression': expr_str,
-            'final_mse': np.float32(final_mse),
-            'final_expression': final_expression,
-            'trajectory': filtered_trajectory,
-            # Store basicsr_params per trajectory
-            'basicsr_params': {
-                'population_size': basicsr_params['population_size'],
-                'num_generations': basicsr_params['num_generations'],
-                'max_depth': basicsr_params['max_depth'],
-                'max_size': basicsr_params['max_size'],
-                'tournament_size': basicsr_params['tournament_size'],
-            },
-            # Store operators and constants per trajectory
-            'binary_operators': binary_operators,
-            'unary_operators': unary_operators,
-            'constants': constants,
-            # Store X_data and y_data for the expression
-            'X_data': X.astype(np.float32),
-            'y_data': y.astype(np.float32),
-        }
-
-        all_trajectories.append(trajectory_data)
+            all_trajectories.append(trajectory_data)
 
     # Save trajectories using gzipped pickle (like generate_expressions.py)
     # Format: gen{N}_{original_expression_filename}.pkl.gz
@@ -234,7 +359,14 @@ def generate_traces_from_expressions(expressions_file: str,
     elif expr_basename.endswith('.json'):
         expr_basename = expr_basename[:-5]  # Remove .json
 
-    output_file = f"{output_dir}/gen{gen_str}_{expr_basename}.pkl.gz"
+    trace_name = f"gen{gen_str}"
+    if checkpoint is not None:
+        trace_name += "_neural"
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    trace_name += f"_{timestamp}"
+
+    if output_file is None:
+        output_file = f"{output_dir}/{trace_name}_{expr_basename}.pkl.gz"
 
     # Create full dataset with metadata
     full_data = {
@@ -287,6 +419,11 @@ if __name__ == "__main__":
     parser.add_argument("--constants", type=str, default=None,
                         help="Comma-separated list of constants (default: uses constants used in expression generation. Empty string for no constants)")
     parser.add_argument("--create_one_step", action="store_true", help="Also convert to one-step format and create train/val splits")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="Path to neural model checkpoint for NeuralSR (if not provided, uses BasicSR)")
+    parser.add_argument("--batch_size", type=int, default=1,
+                        help="Number of expressions to process in parallel (only used with --checkpoint)")
+    parser.add_argument("--seed", type=int, default=42, help="Random seed")
 
     args = parser.parse_args()
 
@@ -310,7 +447,10 @@ if __name__ == "__main__":
         basicsr_params,
         args.max_expressions,
         operator_set=args.operator_set,
-        constants=constants
+        constants=constants,
+        checkpoint=args.checkpoint,
+        batch_size=args.batch_size,
+        seed=args.seed,
     )
 
     if args.create_one_step:

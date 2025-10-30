@@ -8,6 +8,7 @@ from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from format_utils import format_context, format_population_with_fitness, format_inference_input
+from typing import List, Dict, Tuple
 
 
 class Node:
@@ -482,6 +483,35 @@ class BasicSR:
         """Get the full progression data"""
         return self.best_progression.copy()
 
+    @staticmethod
+    def _add_ancestry_info_to_trajectory(trajectory):
+        """Add ancestry information to a trajectory (in-place).
+
+        This is a static method that can be used by both BasicSR and BatchedNeuralSR.
+
+        Args:
+            trajectory: List of generation states with 'heritages' field
+        """
+        if not trajectory:
+            return
+
+        generation = len(trajectory) - 1
+        # Step 1: determine the set of ancestor indices per generation, from 0..generation
+        # The best individual is always at index 0 in the final generation
+        ancestors_by_gen = {generation: [0]}
+        for gen in range(generation, 0, -1):
+            full_parents = trajectory[gen]['heritages']
+            needed_prev = set()
+            for idx in ancestors_by_gen[gen]:
+                for p in full_parents[idx]:
+                    needed_prev.add(int(p))
+            # Deterministic order: ascending original indices
+            ancestors_by_gen[gen - 1] = sorted(needed_prev)
+
+        # Step 2: add ancestors_of_best to each generation
+        for i in range(len(trajectory)):
+            trajectory[i]['ancestors_of_best'] = ancestors_by_gen.get(i, [])
+
     def update_ancestry_info(self):
         """Reconstruct and return the ancestry subgraph for a target expression.
 
@@ -504,20 +534,11 @@ class BasicSR:
         if not (self.record_heritage and self.collect_trajectory):
             return
 
-        generation = len(self.trajectory) - 1
-        # Step 1: determine the set of ancestor indices per generation, from 0..generation
-        ancestors_by_gen = {generation: [0]}
-        for gen in range(generation, 0, -1):
-            full_parents = self.trajectory[gen]['heritages']
-            needed_prev = set()
-            for idx in ancestors_by_gen[gen]:
-                for p in full_parents[idx]:
-                    needed_prev.add(int(p))
-            # Deterministic order: ascending original indices
-            ancestors_by_gen[gen - 1] = sorted(needed_prev)
+        # Use the static method to add ancestry info
+        self._add_ancestry_info_to_trajectory(self.trajectory)
 
-        for i in range(len(self.trajectory)):
-            self.trajectory[i]['ancestors_of_best'] = ancestors_by_gen[i]
+        generation = len(self.trajectory) - 1
+        ancestors_by_gen = {i: self.trajectory[i]['ancestors_of_best'] for i in range(len(self.trajectory))}
 
         # Step 2: reindex parents within the ancestor subsets and emit structure
         result = []
@@ -543,20 +564,6 @@ class BasicSR:
                 gen_items.append((expr_str, parent_ixs))
             result.append(gen_items)
 
-        # Trim trailing generations where the same single best expression
-        # is simply copied forward without any change (no new ancestors),
-        # i.e., consecutive gens each have one node with identical expr and
-        # its parent mapping is [0].
-        # while len(result) >= 2:
-        #     curr = result[-1]
-        #     prev = result[-2]
-        #     if len(curr) == 1 and len(prev) == 1:
-        #         expr_curr, parents_curr = curr[0]
-        #         expr_prev, _ = prev[0]
-        #         if expr_curr == expr_prev and parents_curr == [0]:
-        #             result.pop()
-        #             continue
-        #     break
         assert len(result) == len(self.trajectory)
         self.heritage_info = result
         return result
@@ -656,7 +663,10 @@ class NeuralSR(BasicSR):
         # Load model and tokenizer
         # Prefer tokenizer from the trained checkpoint to preserve special tokens and IDs
         try:
-            self.tokenizer = AutoTokenizer.from_pretrained(self.model_path, trust_remote_code=True)
+            self.tokenizer = AutoTokenizer.from_pretrained(
+                self.model_path,
+                trust_remote_code=True,
+            )
         except Exception:
             # Fallback: load base tokenizer if checkpoint tokenizer is unavailable
             self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
@@ -671,6 +681,17 @@ class NeuralSR(BasicSR):
         # Make sure pad token is defined for generation
         if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
             self.tokenizer.pad_token = self.tokenizer.eos_token
+
+        # For decoder-only architectures (GPT-like), left padding is required for correct batched generation.
+        # Set padding_side to 'left' (and truncation_side to 'left' to preserve the end of long prompts).
+        # This also silences the HF warning seen during batched generation.
+        try:
+            self.tokenizer.padding_side = "left"
+            # Keep the most recent tokens if truncation occurs
+            if hasattr(self.tokenizer, "truncation_side"):
+                self.tokenizer.truncation_side = "left"
+        except Exception:
+            pass
 
         self.model = AutoModelForCausalLM.from_pretrained(self.model_path, trust_remote_code=True)
         self.model.to(self.device)
@@ -835,6 +856,7 @@ class NeuralSR(BasicSR):
 
             # If still empty, fallback to evolution
             if not target_part:
+                print('Empty generation, falling back to basic evolution')
                 self.neural_suggestions_total += 1
                 child, parent_ixs = self.generate_child_via_evolution(population, fitnesses, num_vars)
                 new_population.append(child)
@@ -867,6 +889,7 @@ class NeuralSR(BasicSR):
                 new_population.append(child)
                 heritages.append(parent_ixs)
 
+        # print(' '.join([str(e) for e in new_population]))
         return new_population, heritages
 
     def generate_new_population_autoregressive(self, population, fitnesses, best_individual, num_vars, generation=0):
@@ -1032,3 +1055,322 @@ if __name__ == "__main__":
         else:
             status = "❌ Failed"
         print(f"{result['problem']}: MSE={result['mse']:.2e}, Size={result['size']} {status}")
+
+
+class BatchedNeuralSR:
+    """Batched Neural SR that processes multiple expressions simultaneously with true batching"""
+
+    def __init__(self, model_path, tokenizer_name="EleutherAI/gpt-neo-1.3B", **kwargs):
+        """
+        Initialize batched neural SR
+
+        Args:
+            model_path: Path to trained neural model checkpoint
+            tokenizer_name: Tokenizer to use
+            **kwargs: Additional parameters passed to BasicSR (population_size, num_generations, etc.)
+        """
+
+        self.model_path = model_path
+        self.tokenizer_name = tokenizer_name
+        self.sr_params = kwargs
+
+        # Create a single NeuralSR instance to share the model
+        self._neural_sr_template = None
+
+    def _get_neural_sr_template(self):
+        """Lazy initialization of neural SR template (shares model across batch)"""
+        if self._neural_sr_template is None:
+            self._neural_sr_template = NeuralSR(
+                model_path=self.model_path,
+                tokenizer_name=self.tokenizer_name,
+                **self.sr_params
+            )
+        return self._neural_sr_template
+
+    def batched_fit(self, X_batch: List[np.ndarray], y_batch: List[np.ndarray],
+                   ) -> Tuple[List, List[float], List[List[Dict]]]:
+        """
+        Run neural SR on a batch of expressions simultaneously with true batched neural model calls
+
+        Args:
+            X_batch: List of X data arrays, one per expression
+            y_batch: List of y data arrays, one per expression
+
+        Returns:
+            final_models: List of best models found for each expression
+            final_mses: List of final MSEs for each expression
+            trajectories: List of trajectories (list of generation states) for each expression
+        """
+        batch_size = len(X_batch)
+        assert len(y_batch) == batch_size, "X_batch and y_batch must have same length"
+
+        # Get neural SR template (initializes model once)
+        template = self._get_neural_sr_template()
+
+        # Extract parameters
+        population_size = self.sr_params['population_size']
+        num_generations = self.sr_params['num_generations']
+
+        populations = []
+        fitnesses_batch = []
+        best_individuals = []
+        best_fitnesses = []
+        num_vars_list = []
+        trajectories = [[] for _ in range(batch_size)]
+        best_progressions = [[] for _ in range(batch_size)]
+
+        for i, (X, y) in enumerate(zip(X_batch, y_batch)):
+            num_vars = X.shape[1]
+            num_vars_list.append(num_vars)
+
+            # Create initial population
+            population = template.create_initial_population(num_vars)
+            populations.append(population)
+
+            # Evaluate initial fitness
+            fitnesses = np.array([template.fitness(ind, X, y) for ind in population])
+            fitnesses_batch.append(fitnesses)
+
+            best_idx = np.argmax(fitnesses)
+            best_individuals.append(population[best_idx].copy())
+            best_fitnesses.append(fitnesses[best_idx])
+
+            # Record initial state
+            heritages = [[] for _ in range(len(population))]
+            self._record_population_state(trajectories[i], population, fitnesses, 0, heritages)
+
+        # Run evolution for num_generations
+        for generation in range(1, num_generations + 1):
+            # if generation % 10 == 0:
+            #     print(f"Generation {generation}/{num_generations}")
+
+            # === BATCHED NEURAL MODEL CALL ===
+            # Create all input prompts for the batch
+            input_texts = []
+            for i, (population, fitnesses, num_vars) in enumerate(
+                zip(populations, fitnesses_batch, num_vars_list)
+            ):
+                context, population_str = self._format_context_and_population(
+                    population, fitnesses, num_vars, generation, template
+                )
+                input_text = format_inference_input(
+                    template.tokenizer.bos_token, context, population_str
+                )
+                input_texts.append(input_text)
+
+            # Tokenize all inputs as a batch
+            # Note: We need to pad to the same length for batching
+            inputs = template.tokenizer(
+                input_texts,
+                return_tensors="pt",
+                padding=True,
+                truncation=True
+            ).to(template.device)
+
+            # Calculate how many new members we need per expression
+            num_to_generate = population_size - 1  # -1 for elitism
+
+            # Generate for all expressions in parallel
+            with torch.no_grad():
+                # Generate num_to_generate samples for each input in the batch
+                # This creates batch_size * num_to_generate total sequences
+                outputs = template.model.generate(
+                    **inputs,
+                    max_new_tokens=50,
+                    num_return_sequences=num_to_generate,
+                    temperature=0.8,
+                    do_sample=True,
+                    pad_token_id=template.tokenizer.eos_token_id,
+                    eos_token_id=template.tokenizer.eos_token_id
+                )
+
+            # Process outputs for each expression
+            prompt_lens = inputs["input_ids"].shape[1]
+
+            # outputs shape is (batch_size * num_to_generate, seq_len)
+            # Reshape to group by expression
+            all_predicted_targets = [[] for _ in range(batch_size)]
+
+            for i in range(batch_size):
+                # Extract the num_to_generate sequences for this expression
+                start_idx = i * num_to_generate
+                end_idx = (i + 1) * num_to_generate
+                expr_outputs = outputs[start_idx:end_idx]
+
+                for j in range(num_to_generate):
+                    # Decode the generated sequence
+                    full_gen_ids = expr_outputs[j, prompt_lens:]
+
+                    # Find stop tokens
+                    generated = self._decode_generated_expression(
+                        full_gen_ids, template.tokenizer
+                    )
+
+                    if generated:
+                        first_expr = template.extract_first_expression(generated)
+                        all_predicted_targets[i].append(first_expr if first_expr else generated)
+                    else:
+                        all_predicted_targets[i].append(None)
+
+            # Now process each expression's new population
+            new_populations = []
+            new_fitnesses_batch = []
+
+            for i, (X, y, population, fitnesses, best_individual, num_vars, predicted_targets) in enumerate(
+                zip(X_batch, y_batch, populations, fitnesses_batch, best_individuals, num_vars_list, all_predicted_targets)
+            ):
+                new_population = []
+                heritages = []
+
+                # Elitism: keep best
+                new_population.append(best_individual.copy())
+                best_prev_ix = int(np.argmax(fitnesses))
+                heritages.append([best_prev_ix])
+
+                # Parse and add predicted expressions
+                for target_expr in predicted_targets:
+                    if target_expr is None:
+                        # Fallback to evolution
+                        child, parent_ixs = template.generate_child_via_evolution(
+                            population, fitnesses, num_vars
+                        )
+                        new_population.append(child)
+                        heritages.append(parent_ixs)
+                        continue
+
+                    try:
+                        new_expr = template.parse_generated_expression(target_expr)
+                        new_population.append(new_expr)
+                        heritages.append([])  # Neural suggestions have no explicit parents
+                    except Exception:
+                        # Fallback to evolution if parsing fails
+                        child, parent_ixs = template.generate_child_via_evolution(
+                            population, fitnesses, num_vars
+                        )
+                        new_population.append(child)
+                        heritages.append(parent_ixs)
+
+                # Evaluate new population
+                new_fitnesses = np.array([template.fitness(ind, X, y) for ind in new_population])
+
+                # Update best if improved
+                best_idx = np.argmax(new_fitnesses)
+                if new_fitnesses[best_idx] > best_fitnesses[i]:
+                    best_individuals[i] = new_population[best_idx].copy()
+                    best_fitnesses[i] = new_fitnesses[best_idx]
+
+                    # Calculate actual MSE for tracking
+                    y_pred = best_individuals[i].evaluate(X)
+                    finite_mask = np.isfinite(y_pred)
+                    mag_mask = np.abs(y_pred) < 1e6
+                    valid_mask = finite_mask & mag_mask
+                    if int(np.sum(valid_mask)) >= max(3, int(0.5 * y.shape[0])):
+                        mse = float(np.mean((y[valid_mask] - y_pred[valid_mask]) ** 2))
+                    else:
+                        mse = float('inf')
+
+                    # Track progression
+                    best_progressions[i].append({
+                        'generation': generation,
+                        'expression': str(best_individuals[i]),
+                        'mse': float(mse),
+                        'fitness': float(best_fitnesses[i]),
+                        'size': best_individuals[i].size()
+                    })
+
+                    print(f"  Expr {i}: Gen {generation}, MSE={mse:.6f}, {best_individuals[i]}")
+
+                # Record trajectory
+                self._record_population_state(trajectories[i], new_population, new_fitnesses, generation, heritages)
+
+                # Store for next generation
+                new_populations.append(new_population)
+                new_fitnesses_batch.append(new_fitnesses)
+
+            # Update for next generation
+            populations = new_populations
+            fitnesses_batch = new_fitnesses_batch
+
+        # Extract final results
+        final_models = best_individuals
+        final_mses = []
+
+        for i, (X, y, best_model) in enumerate(zip(X_batch, y_batch, final_models)):
+            # Calculate final MSE
+            y_pred = best_model.evaluate(X)
+            finite_mask = np.isfinite(y_pred)
+            mag_mask = np.abs(y_pred) < 1e6
+            valid_mask = finite_mask & mag_mask
+            if int(np.sum(valid_mask)) >= max(3, int(0.5 * y.shape[0])):
+                mse = float(np.mean((y[valid_mask] - y_pred[valid_mask]) ** 2))
+            else:
+                mse = float('inf')
+            final_mses.append(mse)
+
+        print("\n=== Batched fitting complete ===")
+        for i, (model, mse) in enumerate(zip(final_models, final_mses)):
+            print(f"Expr {i}: MSE={mse:.6f}, {model}")
+
+        # Update ancestry info for each trajectory using BasicSR's static method
+        for i in range(batch_size):
+            BasicSR._add_ancestry_info_to_trajectory(trajectories[i])
+
+        return final_models, final_mses, trajectories
+
+    def _format_context_and_population(self, population, fitnesses, num_vars, generation, template):
+        """Format context and population for the neural model"""
+        variables = [f"x{i}" for i in range(num_vars)]
+        context = format_context(generation, variables, template.operators, template.constants)
+        expressions = [str(expr) for expr in population]
+        population_str = format_population_with_fitness(expressions, fitnesses)
+        return context, population_str
+
+    def _decode_generated_expression(self, gen_ids, tokenizer):
+        """Decode generated token IDs, stopping at control tokens"""
+        # Identify stop token ids
+        eos_id = tokenizer.eos_token_id
+        pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else eos_id
+        stop_token_texts = ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]
+        stop_token_ids = []
+        for tok in stop_token_texts:
+            try:
+                tid = tokenizer.convert_tokens_to_ids(tok)
+                if tid is not None and tid != tokenizer.unk_token_id:
+                    stop_token_ids.append(tid)
+            except Exception:
+                pass
+        for tid in [eos_id, pad_id]:
+            if tid is not None:
+                stop_token_ids.append(tid)
+
+        # Find first occurrence of any stop token
+        cut_idx = None
+        for j, tid in enumerate(gen_ids.tolist()):
+            if tid in stop_token_ids:
+                cut_idx = j
+                break
+        truncated_ids = gen_ids[:cut_idx] if cut_idx is not None else gen_ids
+
+        # Decode
+        generated = tokenizer.decode(truncated_ids, skip_special_tokens=True).strip()
+
+        # Remove any control tokens that may have been emitted in text
+        for tok in stop_token_texts:
+            if tok in generated:
+                generated = generated.split(tok, 1)[0].strip()
+
+        return generated
+
+    def _record_population_state(self, trajectory, population, fitnesses, generation, heritages):
+        """Record the current population state"""
+        expressions = [str(ind) for ind in population]
+        state = {
+            'generation': generation,
+            'population_size': len(population),
+            'expressions': expressions,
+            'fitnesses': fitnesses.tolist() if isinstance(fitnesses, np.ndarray) else fitnesses,
+            'best_fitness': max(fitnesses),
+            'best_expression': expressions[np.argmax(fitnesses)],
+            'heritages': heritages,
+        }
+        trajectory.append(state)

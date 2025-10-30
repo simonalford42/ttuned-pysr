@@ -3,7 +3,7 @@ import random
 import time
 import io
 from contextlib import redirect_stdout
-from basic_sr import BasicSR
+from sr import BasicSR
 from problems import HARDER_PROBLEMS
 
 
@@ -12,41 +12,41 @@ class ProgressCapture:
     def __init__(self):
         self.improvements = []
         self.start_time = None
-        
+
     def parse_progress_line(self, line):
         """Parse a line like 'Gen 15: MSE=7.232738, Size=13, Expr=...'"""
         if not line.startswith("Gen "):
             return None
-            
+
         try:
             # Parse the line
             parts = line.split(": MSE=")
             if len(parts) != 2:
                 return None
-                
+
             gen_part = parts[0]
             rest = parts[1]
-            
+
             generation = int(gen_part.split("Gen ")[1])
-            
+
             # Split on ", Size=" to get MSE and size
             mse_size_parts = rest.split(", Size=")
             if len(mse_size_parts) != 2:
                 return None
-                
+
             mse = float(mse_size_parts[0])
-            
+
             # Split on ", Expr=" to get size
             size_expr_parts = mse_size_parts[1].split(", Expr=")
             if len(size_expr_parts) != 2:
                 return None
-                
+
             size = int(size_expr_parts[0])
-            
+
             # Estimate time (this is approximate since we don't have exact timing)
             current_time = time.time()
             elapsed = current_time - self.start_time if self.start_time else 0
-            
+
             return {
                 'generation': generation,
                 'time': elapsed,
@@ -82,20 +82,20 @@ def run_timed_experiment(problem, time_limit_seconds, seed=42):
     # Capture output to parse improvements
     capture = ProgressCapture()
     output_buffer = io.StringIO()
-    
+
     # Fit the model while capturing output
     start_time = time.time()
     capture.start_time = start_time
-    
+
     with redirect_stdout(output_buffer):
         model.fit(X, y)
-    
+
     actual_time = time.time() - start_time
-    
+
     # Parse the captured output for improvements
     output_lines = output_buffer.getvalue().split('\n')
     improvements = []
-    
+
     for line in output_lines:
         line = line.strip()
         if line.startswith("Gen "):

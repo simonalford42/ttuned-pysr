@@ -13,7 +13,7 @@ from format_utils import (
     format_inference_input,
     format_population_with_fitness,
 )
-from basic_sr import BasicSR
+from sr import BasicSR
 from problems import HARDER_PROBLEMS
 
 

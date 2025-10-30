@@ -1,7 +1,11 @@
 #!/bin/bash
 
-# 10/16/26
-sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train_one_step.py --config training/configs/onestep-tiny.json
+# 10/27/25
+# sbatch -J dagger --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml dagger.py --num_iterations 5 --checkpoint training/checkpoints/tiny_208822/final_model --original_dataset datasets/training/gen1k_arith_1k_c05_20251016_214231_10.jsonl --expressions_file datasets/expressions/arith_10k_c05_20251017_105805.pkl.gz --num_expressions 50 --num_generations 1000
+sbatch -J dagger --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml dagger.py --num_iterations 5 --checkpoint training/checkpoints/tiny_227520/final_model --original_dataset datasets/training/gen1k_arith_50_c05_20251023_215035.jsonl --expressions_file datasets/expressions/arith_50_c05_20251023_215035.pkl.gz --num_generations 1000 --num_expressions 10
+
+# 10/16/25
+# sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train_one_step.py --config training/configs/onestep-tiny.json
 # sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train_one_step.py --config training/configs/onestep-tiny2.json
 # sbatch -J 10k_conv --partition ellis run_cpu.sh python -u one_step_conversion.py --input datasets/traces/gen10k_arith_1k_c05_20251016_214231.pkl.gz --ancestors_only
 # sbatch -J 10k --partition ellis run_cpu.sh python -u generate_traces.py --expressions_file datasets/expressions/arith_1k_c05_20251016_214231.pkl.gz  --operator_set arith --num_generations 10000
