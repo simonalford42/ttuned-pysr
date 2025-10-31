@@ -11,7 +11,7 @@ import argparse
 from utils import get_operators
 
 
-def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[], autoregressive=False):
+def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[], autoregressive=False, non_interactive=False):
     """Compare neural SR vs basic SR generation by generation with user input"""
     problem = HARDER_PROBLEMS[problem_idx]
     X, y = problem(seed=42)
@@ -106,10 +106,15 @@ def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_gen
             print(f"\nNear-zero MSE reached. Stopping evolution.")
             break
 
-        # Wait for user input
-        user_input = input("\nPress Enter to continue to next generation (or 'q' to quit): ")
-        if user_input.strip().lower() == 'q':
-            break
+        # Advance generation interactively unless non_interactive
+        if not non_interactive:
+            try:
+                user_input = input("\nPress Enter to continue to next generation (or 'q' to quit): ")
+            except EOFError:
+                # Treat EOF as quit in non-interactive environments
+                break
+            if user_input.strip().lower() == 'q':
+                break
 
         # Generate new populations for next iteration
         if generation < max_generations - 1:  # Don't generate if this is the last iteration
@@ -157,6 +162,8 @@ def main():
                         help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
     parser.add_argument("--autoregressive", action="store_true",
                         help="Use autoregressive model (default: one-step model)")
+    parser.add_argument("--non-interactive", action="store_true",
+                        help="Run without waiting for input between generations")
 
     args = parser.parse_args()
 
@@ -168,7 +175,8 @@ def main():
         max_generations=args.max_generations,
         binary_operators=binary_operators,
         unary_operators=unary_operators,
-        autoregressive=args.autoregressive
+        autoregressive=args.autoregressive,
+        non_interactive=args.non_interactive,
     )
     if result:
         print("\n✓ Fine-grained comparison completed!")

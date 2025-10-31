@@ -115,7 +115,7 @@ def main():
     result = compare_neural_vs_basic(
         args.checkpoint,
         args.problem,
-        save_trajectories=args.save_trajectories,
+        save_trajectories=args.collect_trajectories,
         autoregressive=args.autoregressive,
         sr_params=sr_params,
     )

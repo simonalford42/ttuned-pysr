@@ -1,8 +1,8 @@
 from generate_traces import generate_traces_from_expressions
-from one_step_conversion import convert_and_make_split
+from convert_data import convert_and_make_split
 import json
 import random
-import train_one_step
+import train
 from utils import load_jsonl, save_jsonl, Timing
 import shutil
 import argparse
@@ -25,7 +25,7 @@ def run_dagger(
     if checkpoint is None:
         print("No checkpoint provided, training initial model from scratch.")
         with Timing("Trained neural network"):
-            checkpoint = train_one_step.main(
+            checkpoint = train.main(
                 config_path="training/configs/dagger.json",
             )
 
@@ -76,7 +76,7 @@ def run_dagger(
 
             with Timing("Trained neural network"):
                 # continue training model on new dataset
-                checkpoint = train_one_step.main(
+                checkpoint = train.main(
                     config_path="training/configs/dagger.json",
                     reset=True,
                     checkpoint=checkpoint,

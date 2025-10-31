@@ -455,7 +455,7 @@ if __name__ == "__main__":
 
     if args.create_one_step:
         # Convert to one-step format and create train/val splits
-        from one_step_conversion import convert_and_make_split
+        from convert_data import convert_and_make_split
         print(f"\n=== Converting to one-step format and creating train/val splits ===")
         convert_and_make_split(output_file, context_type='basic')
 

@@ -9,6 +9,9 @@ import sys
 import json
 
 import matplotlib.pyplot as plt
+from transformers import AutoTokenizer, AutoModelForCausalLM
+from transformers import GPTNeoConfig, GPTNeoForCausalLM
+from point_embedder import E2EPointEmbedder
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -329,6 +332,109 @@ def print_structure(obj, indent=0, max_list_items=3, max_dict_items=10):
           print(f" shape={obj.shape} dtype={obj.dtype}")
       else:
           print()
+
+
+def resolve_model_dir(path: str) -> str:
+    """Return a directory that contains an HF model config.json.
+
+    Accepts either a leaf model dir (itself has config.json), a parent directory
+    that contains a "final_model" subdir, or scans subdirectories for a config.json.
+    """
+    if os.path.isfile(os.path.join(path, "config.json")):
+        return path
+    final = os.path.join(path, "final_model")
+    if os.path.isfile(os.path.join(final, "config.json")):
+        return final
+    candidates = []
+    try:
+        for name in sorted(os.listdir(path)):
+            sub = os.path.join(path, name)
+            if os.path.isdir(sub) and os.path.isfile(os.path.join(sub, "config.json")):
+                has_weights = (
+                    os.path.isfile(os.path.join(sub, "pytorch_model.bin")) or
+                    os.path.isfile(os.path.join(sub, "model.safetensors"))
+                )
+                # Prefer final_model, then dirs that have weights
+                rank = 0 if name == "final_model" else (1 if has_weights else 2)
+                candidates.append((rank, sub))
+    except Exception:
+        pass
+    if candidates:
+        candidates.sort()
+        return candidates[0][1]
+    return path
+
+
+def save_model_bundle(output_dir: str,
+                      model: AutoModelForCausalLM,
+                      tokenizer: AutoTokenizer,
+                      input_embedder=None,
+                      safe_serialization: bool = False) -> None:
+    """Save base HF model, tokenizer, and optional input embedder weights to output_dir.
+
+    - Model/tokenizer are saved with Hugging Face save_pretrained.
+    - Input embedder, if provided, is saved to input_embedder.pt in the same directory.
+    """
+    os.makedirs(output_dir, exist_ok=True)
+    model.save_pretrained(output_dir, safe_serialization=safe_serialization)
+    tokenizer.save_pretrained(output_dir)
+    if input_embedder is not None:
+        torch.save(input_embedder.state_dict(), os.path.join(output_dir, "input_embedder.pt"))
+
+
+def load_model_bundle(model_path: str,
+                      device=None):
+    """Load model, tokenizer, and optional embedder from a training output path.
+
+    Returns: (model, tokenizer, embedder)
+    - embedder is None if no input_embedder.pt found.
+    """
+    device = device or DEVICE
+    model_dir = resolve_model_dir(model_path)
+
+    # Load tokenizer (prefer trust_remote_code to match training)
+    try:
+        tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
+    except Exception:
+        tokenizer = AutoTokenizer.from_pretrained(model_dir)
+
+    # Ensure padding token for decoder-only generation
+    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
+        tokenizer.pad_token = tokenizer.eos_token
+    try:
+        tokenizer.padding_side = "left"
+        if hasattr(tokenizer, "truncation_side"):
+            tokenizer.truncation_side = "left"
+    except Exception:
+        pass
+
+    # Load model/tokenizer directly; expect a proper HF directory
+    model = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True)
+    model.to(device)
+    model.eval()
+
+    # Load optional embedder weights
+    embedder = None
+    embedder_path = os.path.join(model_dir, "input_embedder.pt")
+    if os.path.isfile(embedder_path):
+        hidden = getattr(model.config, "hidden_size", None) or getattr(model.config, "n_embd", None)
+        if hidden is None:
+            raise RuntimeError("Cannot infer hidden size to build E2EPointEmbedder")
+        embedder = E2EPointEmbedder(
+            max_points=64,
+            max_input_dim=10,
+            hidden_size=hidden,
+            mlp_hidden_size=512,
+        )
+        state = torch.load(embedder_path, map_location="cpu")
+        embedder.load_state_dict(state)
+        try:
+            embedder.to(device)
+            embedder.eval()
+        except Exception:
+            pass
+
+    return model, tokenizer, embedder
 
 
 if __name__ == '__main__':

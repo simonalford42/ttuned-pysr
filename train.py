@@ -676,18 +676,13 @@ def main(config, checkpoint=None, resume=False, reset=False):
     else:
         trainer.train()
 
-    # Save the final model (base model) and tokenizer; include embedder weights if present
+    # Save the final model bundle via utils (base model + tokenizer + optional embedder)
+    from utils import save_model_bundle
     final_dir = os.path.join(training_args.output_dir, "final_model")
     os.makedirs(final_dir, exist_ok=True)
-    if hasattr(model, "base_model") and hasattr(model.base_model, "save_pretrained"):
-        # Also disable safetensors for final save to handle tied weights safely
-        model.base_model.save_pretrained(final_dir, safe_serialization=False)
-    else:
-        trainer.save_model(final_dir)
-    tokenizer.save_pretrained(final_dir)
-    if input_embedder is not None:
-        torch.save(input_embedder.state_dict(), os.path.join(final_dir, "input_embedder.pt"))
-    print(f"Model and tokenizer saved to {final_dir}")
+    base_model_to_save = model.base_model if hasattr(model, "base_model") else model
+    save_model_bundle(final_dir, base_model_to_save, tokenizer, input_embedder=input_embedder, safe_serialization=False)
+    print(f"Model bundle saved to {final_dir}")
 
 
 if __name__ == "__main__":

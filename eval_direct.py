@@ -12,39 +12,16 @@ import json
 import torch
 import numpy as np
 from transformers import AutoTokenizer, AutoModelForCausalLM
-from point_embedder import E2EPointEmbedder
 from utils import load_jsonl
 from tqdm import tqdm
 from expression_parser import ExpressionParser
 
 
 def load_model_and_embedder(checkpoint_dir):
-    """Load trained model and embedder."""
-    # Load tokenizer and model
-    tokenizer = AutoTokenizer.from_pretrained(checkpoint_dir)
-    base_model = AutoModelForCausalLM.from_pretrained(checkpoint_dir)
-
-    # Load embedder (assuming it was saved with the model)
-    # For now, recreate it with same params
-    embedder = E2EPointEmbedder(
-        max_points=64,
-        max_input_dim=10,
-        hidden_size=base_model.config.hidden_size,
-        mlp_hidden_size=512,
-    )
-
-    # Wrap model with embedder
-    from train import ModelWithInputEmbedder
-    model = ModelWithInputEmbedder(base_model, embedder)
-
-    # Try to load embedder weights if they exist
-    try:
-        embedder_path = f"{checkpoint_dir}/input_embedder.pt"
-        embedder.load_state_dict(torch.load(embedder_path, map_location='cpu'))
-        print(f"Loaded embedder weights from {embedder_path}")
-    except:
-        print("Warning: Could not load embedder weights. Using initialized weights.")
-
+    """Load trained model and embedder using centralized utils."""
+    from utils import load_model_bundle
+    model, tokenizer, embedder = load_model_bundle(checkpoint_dir, device=torch.device('cpu'))
+    # For direct evaluation, we use base model and embedder to construct inputs_embeds on the fly
     return model, embedder, tokenizer
 
 

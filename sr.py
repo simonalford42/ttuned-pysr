@@ -626,76 +626,10 @@ class NeuralSR(BasicSR):
         self.autoregressive = autoregressive
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Resolve a valid model directory: accept either a leaf model dir (with config.json)
-        # or a parent training output dir that contains a "final_model" subfolder.
-        def _resolve_model_dir(path: str) -> str:
-            if os.path.isfile(os.path.join(path, "config.json")):
-                return path
-            # Prefer final_model if present
-            fm = os.path.join(path, "final_model")
-            if os.path.isfile(os.path.join(fm, "config.json")):
-                return fm
-            # Otherwise, scan subdirs for a config.json (e.g., checkpoint-* or others)
-            candidates = []
-            try:
-                for name in sorted(os.listdir(path)):
-                    sub = os.path.join(path, name)
-                    if os.path.isdir(sub) and os.path.isfile(os.path.join(sub, "config.json")):
-                        # Favor presence of model weights
-                        has_weights = (
-                            os.path.isfile(os.path.join(sub, "pytorch_model.bin")) or
-                            os.path.isfile(os.path.join(sub, "model.safetensors"))
-                        )
-                        candidates.append((0 if name == "final_model" else (1 if has_weights else 2), sub))
-            except Exception:
-                pass
-            if candidates:
-                candidates.sort()
-                return candidates[0][1]
-            # Nothing found; return the original for clearer downstream error
-            return path
-
-        resolved_path = _resolve_model_dir(model_path)
-        if resolved_path != model_path:
-            # Keep attribute for reference/debugging
-            self.model_path = resolved_path
-
-        # Load model and tokenizer
-        # Prefer tokenizer from the trained checkpoint to preserve special tokens and IDs
-        try:
-            self.tokenizer = AutoTokenizer.from_pretrained(
-                self.model_path,
-                trust_remote_code=True,
-            )
-        except Exception:
-            # Fallback: load base tokenizer if checkpoint tokenizer is unavailable
-            self.tokenizer = AutoTokenizer.from_pretrained(tokenizer_name)
-            # Ensure required special tokens exist
-            special_tokens = {
-                "additional_special_tokens": [
-                    "<CONTEXT>", "<POPULATION>", "<FITNESS>", "<TARGET>"
-                ]
-            }
-            self.tokenizer.add_special_tokens(special_tokens)
-
-        # Make sure pad token is defined for generation
-        if self.tokenizer.pad_token is None and self.tokenizer.eos_token is not None:
-            self.tokenizer.pad_token = self.tokenizer.eos_token
-
-        # For decoder-only architectures (GPT-like), left padding is required for correct batched generation.
-        # Set padding_side to 'left' (and truncation_side to 'left' to preserve the end of long prompts).
-        # This also silences the HF warning seen during batched generation.
-        try:
-            self.tokenizer.padding_side = "left"
-            # Keep the most recent tokens if truncation occurs
-            if hasattr(self.tokenizer, "truncation_side"):
-                self.tokenizer.truncation_side = "left"
-        except Exception:
-            pass
-
-        self.model = AutoModelForCausalLM.from_pretrained(self.model_path, trust_remote_code=True)
-        self.model.to(self.device)
-        self.model.eval()
+        # Load model bundle (model, tokenizer, optional embedder) via utils
+        from utils import load_model_bundle
+        self.model, self.tokenizer, self.embedder = load_model_bundle(model_path, device=self.device)
+        self.uses_embedder = self.embedder is not None
 
         # Initialize expression parser
         from expression_parser import ExpressionParser
@@ -704,6 +638,12 @@ class NeuralSR(BasicSR):
         # Track neural suggestion statistics
         self.neural_suggestions_total = 0
         self.neural_suggestions_well_formed = 0
+
+    def fit(self, X, y, verbose=False):
+        # Store data for embedder-conditioned generation
+        self._X = X
+        self._y = y
+        return super().fit(X, y, verbose=verbose)
 
     def format_context_and_population(self, population, fitnesses, num_vars, generation=0):
         """Format context and population for the neural model"""
@@ -792,12 +732,14 @@ class NeuralSR(BasicSR):
         # Calculate how many new members we need to generate
         num_to_generate = self.population_size - 1  # -1 for elitism
 
-        # Create input prompt using shared formatting
+        # Create input prompt using shared formatting and prepare inputs (embedder-aware)
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
-        # print(input_text)
-
-        # Tokenize and generate all members in parallel
-        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+        from embedder_infer import make_onestep_inputs
+        inputs, decode_fn = make_onestep_inputs(
+            self.model, self.tokenizer, input_text,
+            embedder=self.embedder if self.uses_embedder else None,
+            X=self._X, y=self._y, device=self.device,
+        )
 
         with torch.no_grad():
             outputs = self.model.generate(
@@ -814,43 +756,14 @@ class NeuralSR(BasicSR):
         all_predicted_targets = []  # Collect all targets first
 
         for i in range(num_to_generate):
-            # Decode only up to the first stop token
-            prompt_len = inputs["input_ids"].shape[1]
-            full_gen_ids = outputs[i, prompt_len:]
-
-            # Identify stop token ids (eos/pad and our control tokens)
-            eos_id = self.tokenizer.eos_token_id
-            pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else eos_id
-            stop_token_texts = ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]
-            stop_token_ids = []
-            for tok in stop_token_texts:
-                try:
-                    tid = self.tokenizer.convert_tokens_to_ids(tok)
-                    if tid is not None and tid != self.tokenizer.unk_token_id:
-                        stop_token_ids.append(tid)
-                except Exception:
-                    pass
-            # Always include eos/pad ids
-            for tid in [eos_id, pad_id]:
-                if tid is not None:
-                    stop_token_ids.append(tid)
-
-            # Find first occurrence of any stop token id
-            cut_idx = None
-            for j, tid in enumerate(full_gen_ids.tolist()):
-                if tid in stop_token_ids:
-                    cut_idx = j
-                    break
-            gen_ids = full_gen_ids[:cut_idx] if cut_idx is not None else full_gen_ids
-
-            # Decode, skipping special tokens to avoid <|endoftext|> noise
-            generated = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+            # Decode generated text using helper (handles token vs inputs_embeds)
+            generated = decode_fn(outputs[i])
 
             # Treat the generated text itself as the target part
             target_part = generated
 
             # If model redundantly emitted a control token in text, keep only the part before it
-            for tok in stop_token_texts:
+            for tok in ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]:
                 if tok in target_part:
                     target_part = target_part.split(tok, 1)[0].strip()
 
@@ -912,11 +825,14 @@ class NeuralSR(BasicSR):
         # Format input for neural model
         context, population_str = self.format_context_and_population(population, fitnesses, num_vars, generation)
 
-        # Create input prompt using shared formatting
+        # Create input prompt using shared formatting and prepare inputs (embedder-aware)
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
-
-        # Tokenize and generate entire population in one pass
-        inputs = self.tokenizer(input_text, return_tensors="pt").to(self.device)
+        from embedder_infer import make_onestep_inputs
+        inputs, decode_fn = make_onestep_inputs(
+            self.model, self.tokenizer, input_text,
+            embedder=self.embedder if getattr(self, 'uses_embedder', False) else None,
+            X=getattr(self, '_X', None), y=getattr(self, '_y', None), device=self.device,
+        )
 
         with torch.no_grad():
             # Generate longer sequence for autoregressive (entire population)
@@ -932,39 +848,11 @@ class NeuralSR(BasicSR):
                 eos_token_id=self.tokenizer.eos_token_id
             )
 
-        # Decode the generated output
-        prompt_len = inputs["input_ids"].shape[1]
-        full_gen_ids = outputs[0, prompt_len:]
-
-        # Identify stop token ids
-        eos_id = self.tokenizer.eos_token_id
-        pad_id = self.tokenizer.pad_token_id if self.tokenizer.pad_token_id is not None else eos_id
-        stop_token_texts = ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]
-        stop_token_ids = []
-        for tok in stop_token_texts:
-            try:
-                tid = self.tokenizer.convert_tokens_to_ids(tok)
-                if tid is not None and tid != self.tokenizer.unk_token_id:
-                    stop_token_ids.append(tid)
-            except Exception:
-                pass
-        for tid in [eos_id, pad_id]:
-            if tid is not None:
-                stop_token_ids.append(tid)
-
-        # Find first occurrence of any stop token
-        cut_idx = None
-        for j, tid in enumerate(full_gen_ids.tolist()):
-            if tid in stop_token_ids:
-                cut_idx = j
-                break
-        gen_ids = full_gen_ids[:cut_idx] if cut_idx is not None else full_gen_ids
-
-        # Decode the entire generated population
-        generated_text = self.tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+        # Decode the entire generated population (helper handles token vs inputs_embeds)
+        generated_text = decode_fn(outputs[0])
 
         # Remove any control tokens that may have been emitted
-        for tok in stop_token_texts:
+        for tok in ["<TARGET>", "<CONTEXT>", "<POPULATION>", "<FITNESS>"]:
             if tok in generated_text:
                 generated_text = generated_text.split(tok, 1)[0].strip()
 
@@ -1027,6 +915,12 @@ class NeuralSR(BasicSR):
         if self.neural_suggestions_total == 0:
             return 0.0
         return (self.neural_suggestions_well_formed / self.neural_suggestions_total) * 100.0
+
+    # Ensure X/y are available for embedder-based generation even when not calling fit()
+    def fitness(self, individual, X, y):
+        self._X = X
+        self._y = y
+        return super().fitness(individual, X, y)
 
 
 if __name__ == "__main__":

@@ -12,7 +12,7 @@ import os
 import pickle
 import gzip
 from generate_traces import generate_traces_from_expressions
-from one_step_conversion import convert_basicsr_to_one_step_format
+from convert_data import convert_basicsr_to_one_step_format
 
 
 def test_trace_generation():
