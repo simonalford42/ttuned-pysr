@@ -253,7 +253,8 @@ def generate_e2e_expressions(
     complexity: float = 0.5,
     n_input_points: int = None,
     seed: int = 42,
-    constants: List[float] = [1.0]
+    constants: List[float] = [1.0],
+    **kwargs,
 ) -> List[Dict[str, Any]]:
     """
     Generate expressions using E2EDataGenerator.
@@ -294,7 +295,7 @@ def generate_e2e_expressions(
 
     for i in tqdm(range(n_expressions)):
         # Generate expression with data
-        sample = gen.generate_expression(train=True, n_input_points=n_input_points)
+        sample = gen.generate_expression(train=True, n_input_points=n_input_points, **kwargs)
         expr_str = sample["expr_str"]
         tree = sample["tree"]
 
@@ -357,13 +358,9 @@ def generate_training_expressions(n_expressions: int = 100,
                                  seed: int = 42,
                                  constants: List[float] = [1.0],
                                  output_dir: str = "datasets/expressions",
-                                 demo=False) -> str:
+                                 demo=False,
+                                 **kwargs) -> str:
     """Generate training expressions with data and save to file"""
-
-    print(f"Generating {n_expressions} training expressions...")
-    print(f"Parameters: binary_ops={binary_ops}, unary_ops={unary_ops or 'none'}, complexity={complexity}")
-    print(f"Constants: {constants if constants else 'none'}")
-    print(f"Data points per expression: {n_input_points}")
 
     # Generate expressions
     expressions = generate_e2e_expressions(
@@ -373,7 +370,8 @@ def generate_training_expressions(n_expressions: int = 100,
         complexity=complexity,
         n_input_points=n_input_points,
         seed=seed,
-        constants=constants
+        constants=constants,
+        **kwargs,
     )
 
     if demo:
@@ -417,17 +415,13 @@ def generate_training_expressions(n_expressions: int = 100,
 
     # Complexity: c05, c10, etc.
     complexity_str = f"c{int(complexity * 10):02d}"
+    if "nb_binary_ops" in kwargs:
+        complexity_str = f"b{kwargs['nb_binary_ops']}"
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    # filename = f"{output_dir}/train_{size_str}_{ops_str}_{complexity_str}_{timestamp}.pkl.gz"
     filename = f"{output_dir}/{ops_str}_{size_str}_{complexity_str}_{timestamp}.pkl.gz"
 
-    # Save expressions
     save_expressions(expressions, filename, metadata)
-
-    print(f"✓ Generated {len(expressions)} expressions with data")
-    print(f"✓ Saved to {filename}")
-
     return filename
 
 
@@ -482,6 +476,7 @@ if __name__ == "__main__":
     parser.add_argument("--unary_ops", type=str, default="", help="Comma-separated unary operators (e.g., abs,sqrt,sin,cos,tan,inv)")
     parser.add_argument("--complexity", type=float, default=0.5, help="Complexity level (0.0 to 1.0)")
     parser.add_argument("--n_input_points", type=int, default=None, help="Number of data points per expression")
+    parser.add_argument("--n_binary_ops", type=int, default=None, help="Number of binary operations per expression (overrides complexity)")
     parser.add_argument("--seed", type=int, default=42, help="Random seed")
     parser.add_argument("--demo", action="store_true", help="Instead of saving to file, print out the expressions and then finish")
     parser.add_argument("--output_dir", default="datasets/expressions", help="Output directory")
@@ -494,6 +489,11 @@ if __name__ == "__main__":
     else:
         constants_list = []
 
+    if args.n_binary_ops:
+        kwargs = {'nb_binary_ops': args.n_binary_ops}
+    else:
+        kwargs = {}
+
     generate_training_expressions(
         n_expressions=args.n_expressions,
         binary_ops=args.binary_ops,
@@ -503,5 +503,6 @@ if __name__ == "__main__":
         seed=args.seed,
         constants=constants_list,
         output_dir=args.output_dir,
-        demo=args.demo
+        demo=args.demo,
+        **kwargs,
     )

@@ -221,7 +221,7 @@ def main():
                         help="Number of examples to show (default: 5)")
     parser.add_argument("--stats_sample_size", type=int, default=50,
                         help="Number of trajectories to sample for stats calculation (default: 1000)")
-    parser.add_argument("--interactive", action="store_true",
+    parser.add_argument("--interactive", "-i", action="store_true",
                         help="Drop into interactive debugger after inspection")
 
     args = parser.parse_args()

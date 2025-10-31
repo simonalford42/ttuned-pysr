@@ -13,7 +13,7 @@ from tqdm import tqdm
 import math
 
 
-def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', sample_fraction=1.0, ancestors_only=False):
+def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', sample_fraction=1.0, ancestors_only=False, expressions_file=None):
     """
     Convert BasicSR trajectory file to one-step prediction format.
     Each trajectory becomes multiple training examples (one for each generation transition).
@@ -35,16 +35,29 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
     converted_data = []
 
     # Get source expressions file from metadata (for loading X, y later during training)
-    source_expressions_file = data['metadata'].get('source_expressions_file', None)
+    source_expressions_file = data['metadata']['source_expressions_file']
+    if expressions_file:
+        if source_expressions_file != expressions_file:
+            raise ValueError(f"Provided expressions_file {expressions_file} does not match source_expressions_file {source_expressions_file} in trajectory metadata.")
 
     # Extract trajectories from current format
     trajectories = data['trajectories']
+
+    if expressions_file:
+        # load expressions pkl file into dict mapping expr string to expression entry
+        with gzip.open(expressions_file, 'rb') as f:
+            expressions_data = pickle.load(f)
+        expr_dict = {expr['expression']: expr
+                     for expr in expressions_data['expressions']}
 
     # Process each trajectory
     for traj in tqdm(trajectories):
         trajectory_data = traj['trajectory']
         target_expr = traj['target_expression']
-        expression_id = traj.get('expression_id', None)  # Get expression ID if available
+        expression_id = traj.get('expression_id', None)
+        if expression_id is None:
+            # find matching expression from expressions file
+            expression_id = expr_dict[target_expr]['id']
 
         # Extract operators and constants from trajectory
         binary_operators = sorted(traj['binary_operators'])
@@ -162,7 +175,7 @@ def split_train_val(input_file, train_file, val_file, val_split=0.1, seed=42):
     return len(train_data), len(val_data)
 
 
-def convert_and_make_split(input_file, context_type, sample_fraction, split, ancestors_only):
+def convert_and_make_split(input_file, context_type, sample_fraction, split, ancestors_only, expressions_file):
     # Generate output filename from input filename
     input_path = Path(input_file)
     input_filename = input_path.stem  # Remove extension
@@ -180,7 +193,7 @@ def convert_and_make_split(input_file, context_type, sample_fraction, split, anc
 
     # Convert trajectories to temporary file
     # print(f"Using {context_type} context type")
-    convert_basicsr_to_one_step_format(input_file, str(output_file), context_type, sample_fraction, ancestors_only)
+    convert_basicsr_to_one_step_format(input_file, str(output_file), context_type, sample_fraction, ancestors_only, expressions_file)
 
     if split:
         base_name = str(output_file).replace('.jsonl', '')
@@ -193,6 +206,7 @@ def convert_and_make_split(input_file, context_type, sample_fraction, split, anc
 def main():
     parser = argparse.ArgumentParser(description="Convert BasicSR trajectories to training formats")
     parser.add_argument("--input", required=True, help="Input trace file (.pkl.gz)")
+    parser.add_argument("--expressions_file", default=None, help="Expressions file to match expression IDs to")
     parser.add_argument("--context_type", default="basic", choices=["basic", "rich", "superrich"],
                        help="Context type to use: basic (default), rich (with data stats), or superrich (with plot)")
     parser.add_argument("--split", action="store_true", help="If set, split into train/val sets")
@@ -200,7 +214,7 @@ def main():
     parser.add_argument("--sample_fraction", type=float, default=1.0,
                         help="Fraction of data to sample from input file (default 1.0 = all data)")
     args = parser.parse_args()
-    convert_and_make_split(args.input, args.context_type, sample_fraction=args.sample_fraction, split=args.split, ancestors_only=args.ancestors_only)
+    convert_and_make_split(args.input, args.context_type, sample_fraction=args.sample_fraction, split=args.split, ancestors_only=args.ancestors_only, expressions_file=args.expressions_file)
 
 
 if __name__ == "__main__":

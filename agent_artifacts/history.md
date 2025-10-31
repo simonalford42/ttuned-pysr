@@ -936,3 +936,116 @@ python generate_traces.py \
 - Both `BasicSR` and `BatchedNeuralSR` now use the same ancestry tracking logic
 - Clean separation of concerns: static method is pure function that operates on trajectory data
 
+## 2025-10-30: Implemented Direct Prediction Baseline
+
+### Summary
+Created a "direct" baseline that predicts target expressions directly from input embeddings (X, y) → expression, without any context or population information. This provides a simple baseline to compare against the one-step and autoregressive approaches.
+
+### Files Created
+
+**1. direct_conversion.py**
+- Converts expression datasets to direct prediction training format
+- Each example: `{"X_data": [...], "y_data": [...], "target": "expression"}`
+- Stores X, y data directly in JSONL (no expression ID lookup needed)
+- Includes train/val split functionality
+
+**2. training/configs/direct-tiny.json**
+- Configuration for direct prediction training
+- Key settings:
+  - `"training_mode": "direct"` - enables direct prediction mode
+  - `"input_embedder": "e2e"` - uses E2EPointEmbedder
+  - Trains on 100 expressions (90 train, 10 val)
+
+**3. eval_direct.py**
+- Evaluation script for direct prediction models
+- Loads trained model and generates predictions
+- Computes exact match accuracy by comparing generated expression with target
+
+### Modified Files
+
+**train.py** (copy of train_one_step.py with modifications)
+- Added support for "direct" training mode alongside "onestep" mode
+- Modified tokenization:
+  - Direct mode: only BOS token → target (all input is embeddings)
+  - Onestep mode: context + population → target (original behavior)
+- Updated data collator to handle both modes:
+  - Direct: loads X, y directly from JSONL
+  - Onestep: loads X, y from expression_id lookup
+- Added gradient checkpointing methods to ModelWithInputEmbedder wrapper
+- Input embedder is required for direct mode
+
+### Model Specifications
+
+**Parameters:**
+- Base Model (GPT-Neo-tiny): 16,547,584 parameters
+- E2EPointEmbedder: 137,472 parameters
+- **Total: 16,685,056 parameters (~16.7M)**
+
+**Training Performance:**
+- Speed: ~2 seconds per step (batch size 8)
+- Throughput: ~4 steps/second or 32 examples/second
+- Memory: ~500MB on single GPU
+- **Recommendation: Use 1 GPU** (model is very small)
+
+### Architecture
+
+**Input Processing:**
+1. X_data (n_points, n_vars) and y_data (n_points,) are embedded using E2EPointEmbedder
+2. Embedder pads/truncates to fixed size: (64, hidden_size)
+3. Prefix embeddings are prepended to token sequence
+4. Labels have -100 for prefix positions (no loss on embeddings)
+
+**Training Flow:**
+```
+(X, y) → E2EPointEmbedder → prefix_embeds (64, hidden_size)
+                                  ↓
+                        [prefix_embeds | BOS token]
+                                  ↓
+                          Base Language Model
+                                  ↓
+                          Generated expression
+```
+
+### Usage
+
+**Generate dataset:**
+```bash
+python direct_conversion.py \
+    --input datasets/expressions/arith_100_c05_20251029_144200.pkl.gz \
+    --split
+```
+
+**Train model:**
+```bash
+python train.py --config training/configs/direct-tiny.json
+```
+
+**Evaluate accuracy:**
+```bash
+python eval_direct.py \
+    --checkpoint training/checkpoints/direct-tiny_<timestamp>/final_model \
+    --val_file datasets/training/arith_100_c05_20251029_144200_direct_val.jsonl
+```
+
+### Test Results
+
+Successfully tested on 100-expression dataset:
+- Training works correctly with both modes
+- Loss decreases during training (1.32 after 10 steps)
+- Model trains stably with bf16 precision
+- Gradient checkpointing functional
+
+### Future Work
+
+1. Implement accuracy callback for real-time evaluation during training
+2. Add proper model saving/loading for embedder weights
+3. Test on larger datasets (1k, 10k expressions)
+4. Compare direct baseline performance with one-step and autoregressive approaches
+5. Experiment with different embedder architectures
+
+### Notes
+
+- Accuracy evaluation is separate script for flexibility
+- Warning about shared tensors during save is benign (tied embeddings)
+- train.py maintains backward compatibility with one-step training via mode parameter
+

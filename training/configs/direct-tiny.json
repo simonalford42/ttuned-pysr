@@ -1,0 +1,39 @@
+{
+  "name": "direct-tiny",
+  "seed": 42,
+  "training_mode": "direct",
+  "input_embedder": "e2e",
+  "data_dir": "",
+  "train_file": "datasets/training/arith_1k_b1_20251030_153044_direct.jsonl",
+  "val_file": "datasets/training/arith_1_b1_20251030_161535_direct.jsonl",
+  "model_config": "training/configs/gpt-neo-tiny.json",
+  "num_train": -1,
+  "num_val": -1,
+  "context_length": 1024,
+  "training_args": {
+    "output_dir": "training/checkpoints/direct-tiny",
+    "overwrite_output_dir": true,
+    "num_train_epochs": 10,
+    "per_device_train_batch_size": 8,
+    "per_device_eval_batch_size": 8,
+    "warmup_steps": 100,
+    "learning_rate": 5e-4,
+    "logging_steps": 10,
+    "save_steps": 500,
+    "eval_steps": 10,
+    "evaluation_strategy": "steps",
+    "save_strategy": "steps",
+    "save_safetensors": false,
+    "load_best_model_at_end": true,
+    "metric_for_best_model": "eval_loss",
+    "greater_is_better": false,
+    "dataloader_drop_last": true,
+    "remove_unused_columns": false,
+    "bf16": true
+  },
+  "wandb": {
+    "project": "ttsr",
+    "entity": "simon-alford",
+    "dir": "./wandb"
+  }
+}

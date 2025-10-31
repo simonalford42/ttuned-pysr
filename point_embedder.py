@@ -141,6 +141,4 @@ def test_e2e_point_embedder():
 
 
 if __name__ == "__main__":
-    test_point_embedder()
-    print("\n" + "="*50 + "\n")
     test_e2e_point_embedder()
