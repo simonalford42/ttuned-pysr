@@ -9,9 +9,8 @@ import sys
 import json
 
 import matplotlib.pyplot as plt
-from transformers import AutoTokenizer, AutoModelForCausalLM
-from transformers import GPTNeoConfig, GPTNeoForCausalLM
-from point_embedder import E2EPointEmbedder
+import ast
+import re
 
 DEVICE = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 
@@ -106,17 +105,6 @@ def load_json(path):
     return data
 
 
-# batched covariance calculation:
-# https://stackoverflow.com/a/71357620/4383594
-def batch_cov(points):
-    B, N, D = points.size()
-    mean = points.mean(dim=1).unsqueeze(1)
-    diffs = (points - mean).reshape(B * N, D)
-    prods = torch.bmm(diffs.unsqueeze(2), diffs.unsqueeze(1)).reshape(B, N, D, D)
-    bcov = prods.sum(dim=1) / (N - 1)  # Unbiased estimate
-    return bcov  # (B, D, D)
-
-
 def get_operators(operator_set: str):
     if operator_set == "arith":
         binary_operators = ["+", "-", "*"]
@@ -133,10 +121,6 @@ def get_operators(operator_set: str):
 def get_script_execution_command():
     return 'python ' + ' '.join(sys.argv)
 
-def gpu_check():
-    print_torch_device()
-    torch.arange(3).to(DEVICE)
-
 
 def warn(s):
     if s not in WARNINGS:
@@ -148,21 +132,94 @@ def hash_tensor(t):
     return (t * torch.arange(torch.numel(t)).reshape(t.shape)**2).sum() % 1000
 
 
-class CustomDictOne(dict):
-    def __init__(self,*arg,**kw):
-        super(CustomDictOne, self).__init__(*arg, **kw)
+_SEGMENT_RE = re.compile(r"([^\[\]]+)|(\[(\d+)\])")
 
 
-def log(s: str):
-    with open('log.txt', 'r+') as f:
-        f.write(s)
+def _coerce_value(raw):
+    """Best-effort convert a string to Python type (int/float/bool/None/list/dict).
+    Accepts lowercase true/false/null/none. Falls back to original string.
+    """
+    if isinstance(raw, (int, float, bool)) or raw is None:
+        return raw
+    if not isinstance(raw, str):
+        return raw
+    low = raw.strip().lower()
+    if low in {"true", "false"}:
+        return low == "true"
+    if low in {"null", "none"}:
+        return None
+    try:
+        return ast.literal_eval(raw)
+    except Exception:
+        return raw
 
 
-def print_torch_device():
-    if torch.cuda.is_available():
-        print('Using torch device ' + torch.cuda.get_device_name(DEVICE))
-    else:
-        print('Using torch device CPU')
+def _parse_keypath(path: str):
+    """Parse a dot/bracket path like 'a.b[0].c' into ["a","b",0,"c"]."""
+    parts = []
+    for segment in path.split('.'):
+        if not segment:
+            continue
+        for m in _SEGMENT_RE.finditer(segment):
+            key, bracket, idx = m.groups()
+            if key is not None:
+                parts.append(key)
+            elif idx is not None:
+                parts.append(int(idx))
+    return parts
+
+
+def apply_override(cfg: dict, path: str, value):
+    """Set cfg[path] = value creating intermediate dicts/lists as needed.
+    Supports dict keys and list indices via [N].
+    """
+    tokens = _parse_keypath(path)
+    if not tokens:
+        return
+    cur = cfg
+    for i, tok in enumerate(tokens):
+        is_last = i == len(tokens) - 1
+        if is_last:
+            if isinstance(tok, int):
+                if not isinstance(cur, list):
+                    # Replace non-list with a new list
+                    cur_list = []
+                    # cannot assign back to parent here without full path context; assume list exists
+                    cur = cur_list
+                if tok >= len(cur):
+                    cur.extend([None] * (tok - len(cur) + 1))
+                cur[tok] = value
+            else:
+                if isinstance(cur, dict):
+                    cur[tok] = value
+                else:
+                    raise TypeError(f"Cannot set key '{tok}' on non-dict container at path '{path}'")
+        else:
+            nxt = tokens[i + 1]
+            want_list = isinstance(nxt, int)
+            if isinstance(tok, int):
+                if not isinstance(cur, list):
+                    cur = []
+                if tok >= len(cur):
+                    cur.extend([None] * (tok - len(cur) + 1))
+                if cur[tok] is None or (want_list and not isinstance(cur[tok], list)) or (not want_list and not isinstance(cur[tok], dict)):
+                    cur[tok] = [] if want_list else {}
+                cur = cur[tok]
+            else:
+                if tok not in cur or cur[tok] is None or (want_list and not isinstance(cur[tok], list)) or (not want_list and not isinstance(cur[tok], dict)):
+                    cur[tok] = [] if want_list else {}
+                cur = cur[tok]
+
+
+def parse_overrides(overrides):
+    """Parse a list of 'key=val' strings into (path, value) pairs with coerced values."""
+    parsed = []
+    for ov in overrides or []:
+        if '=' not in ov:
+            raise ValueError(f"Override must be in key=val format: {ov}")
+        key, val = ov.split('=', 1)
+        parsed.append((key.strip(), _coerce_value(val.strip())))
+    return parsed
 
 
 def assert_equal(*args):
@@ -210,56 +267,6 @@ def next_unused_path(path, extend_fn=lambda i: f'__({i})'):
         i += 1
 
     return path
-
-
-def logaddexp(tensor, other, mask=[1, 1]):
-    if type(mask) in [list, tuple]:
-        mask = torch.tensor(mask)
-
-    assert mask.shape == (2, ), 'Invalid mask shape'
-
-    a = torch.max(tensor, other)
-    # if max is -inf, set a to zero, to avoid making nan's
-    a = torch.where(a == float('-inf'), torch.zeros(a.shape), a)
-
-    return a + ((tensor - a).exp()*mask[0] + (other - a).exp()*mask[1]).log()
-
-
-def log1minus(x):
-    """
-    Returns log(1 - x.exp())
-    This is the logged version of finding 1 - p
-    """
-    return torch.log1p(-x.exp())
-
-
-def compare_tensors(t1, t2):
-    # (a, b, c, d), (a, b, c, d) -> (a, b, c, 2d)
-    plot_tensor(torch.cat((t1, t2), dim=-1))
-
-
-def plot_tensor(t):
-    if t.dim() == 2:
-        plot_2D_tensor(t)
-    else:
-        init_shape = t.shape[:-2]
-        for init_dim_values in itertools.product(*map(range, init_shape)):
-            plot_2D_tensor(t[init_dim_values], label=init_dim_values)
-
-
-def plot_2D_tensor(t, label=None):
-    (y, x) = t.shape
-    fig, ax = plt.subplots()
-    ax.imshow(t)
-
-    print(t)
-    for j in range(y):
-        for i in range(x):
-            ax.text(i, j, f'{t[j][i].item():.2f}', ha="center", va="center", color="w", fontsize=6)
-
-    if label is not None:
-        plt.title(label)
-    plt.show()
 
 
 class Timing(object):
@@ -363,78 +370,6 @@ def resolve_model_dir(path: str) -> str:
         candidates.sort()
         return candidates[0][1]
     return path
-
-
-def save_model_bundle(output_dir: str,
-                      model: AutoModelForCausalLM,
-                      tokenizer: AutoTokenizer,
-                      input_embedder=None,
-                      safe_serialization: bool = False) -> None:
-    """Save base HF model, tokenizer, and optional input embedder weights to output_dir.
-
-    - Model/tokenizer are saved with Hugging Face save_pretrained.
-    - Input embedder, if provided, is saved to input_embedder.pt in the same directory.
-    """
-    os.makedirs(output_dir, exist_ok=True)
-    model.save_pretrained(output_dir, safe_serialization=safe_serialization)
-    tokenizer.save_pretrained(output_dir)
-    if input_embedder is not None:
-        torch.save(input_embedder.state_dict(), os.path.join(output_dir, "input_embedder.pt"))
-
-
-def load_model_bundle(model_path: str,
-                      device=None):
-    """Load model, tokenizer, and optional embedder from a training output path.
-
-    Returns: (model, tokenizer, embedder)
-    - embedder is None if no input_embedder.pt found.
-    """
-    device = device or DEVICE
-    model_dir = resolve_model_dir(model_path)
-
-    # Load tokenizer (prefer trust_remote_code to match training)
-    try:
-        tokenizer = AutoTokenizer.from_pretrained(model_dir, trust_remote_code=True)
-    except Exception:
-        tokenizer = AutoTokenizer.from_pretrained(model_dir)
-
-    # Ensure padding token for decoder-only generation
-    if tokenizer.pad_token is None and tokenizer.eos_token is not None:
-        tokenizer.pad_token = tokenizer.eos_token
-    try:
-        tokenizer.padding_side = "left"
-        if hasattr(tokenizer, "truncation_side"):
-            tokenizer.truncation_side = "left"
-    except Exception:
-        pass
-
-    # Load model/tokenizer directly; expect a proper HF directory
-    model = AutoModelForCausalLM.from_pretrained(model_dir, trust_remote_code=True)
-    model.to(device)
-    model.eval()
-
-    # Load optional embedder weights
-    embedder = None
-    embedder_path = os.path.join(model_dir, "input_embedder.pt")
-    if os.path.isfile(embedder_path):
-        hidden = getattr(model.config, "hidden_size", None) or getattr(model.config, "n_embd", None)
-        if hidden is None:
-            raise RuntimeError("Cannot infer hidden size to build E2EPointEmbedder")
-        embedder = E2EPointEmbedder(
-            max_points=64,
-            max_input_dim=10,
-            hidden_size=hidden,
-            mlp_hidden_size=512,
-        )
-        state = torch.load(embedder_path, map_location="cpu")
-        embedder.load_state_dict(state)
-        try:
-            embedder.to(device)
-            embedder.eval()
-        except Exception:
-            pass
-
-    return model, tokenizer, embedder
 
 
 if __name__ == '__main__':

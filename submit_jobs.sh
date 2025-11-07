@@ -1,9 +1,29 @@
 #!/bin/bash
 
+# 11/3
+# sbatch -J ttsr --partition ellis --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/onestep-tiny.json
+
+# Direct prediction (Set vs E2E baseline)
+# fourier features 4, yes normalization
+sbatch -J ttsr --partition gpu run.sh accelerate launch --config_file configs/accelerate2.yaml train.py --config configs/onestep-tiny.json
+# sbatch -J direct_e2e_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-e2e-small.json
+
+# normalization or not, fourier features none or 2
+# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json
+# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small2.json
+# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small3.json
+
+# prefix length 8 or 24
+# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json
+# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small2.json
+
+# sbatch -J ttsr --partition gpu run.sh accelerate launch --config_file configs/accelerate.yaml train.py --config configs/onestep-tiny2.json
+# sbatch -J direct --partition gpu --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct.json
+
 # 10/30
-sbatch -J direct --partition gpu --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct.json
-sbatch -J direct --partition ellis --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct2.json
-sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train.py --config training/configs/onestep-tiny.json
+# sbatch -J direct --partition gpu --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct.json
+# sbatch -J direct --partition gpu --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct2.json
+# sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml train.py --config training/configs/onestep-tiny.json
 
 # 10/27/25
 # sbatch -J dagger --partition ellis run.sh accelerate launch --config_file training/configs/accelerate.yaml dagger.py --num_iterations 5 --checkpoint training/checkpoints/tiny_208822/final_model --original_dataset datasets/training/gen1k_arith_1k_c05_20251016_214231_10.jsonl --expressions_file datasets/expressions/arith_10k_c05_20251017_105805.pkl.gz --num_expressions 50 --num_generations 1000

@@ -21,149 +21,22 @@ from transformers import TrainingArguments
 
 import wandb
 from format_utils import format_input_part, format_target_part
+import utils
 from datetime import datetime
-from point_embedder import E2EPointEmbedder
-from expression_parser import ExpressionParser
+from modules import E2EPointEmbedder, ModelWithInputEmbedder, SetPointEmbedder, WithEmbedderForCausalLM
+from expression_parser import ExpressionParser, safe_parse_e2e
+from eval_direct import r2_acc_mse
 
 
-class ModelWithInputEmbedder(torch.nn.Module):
-    """Wrapper that combines a language model with an input embedder.
-
-    Expects token `input_ids` and optional `attention_mask`, along with
-    point data tensors `points_X` and `points_y` to build a learned prefix.
-    """
-    def __init__(self, base_model, input_embedder):
-        super().__init__()
-        self.base_model = base_model
-        self.input_embedder = input_embedder
-        # Expose config for Trainer
-        self.config = base_model.config
-
-    def forward(
-        self,
-        input_ids=None,
-        attention_mask=None,
-        labels=None,
-        points_X=None,
-        points_y=None,
-        **kwargs,
-    ):
-        # Compute prefix embeddings on the correct device/dtype
-        if self.input_embedder is None:
-            return self.base_model(input_ids=input_ids, attention_mask=attention_mask, labels=labels, **kwargs)
-
-        # Resolve dtype/device from base model's embeddings
-        tok_embed = self.base_model.get_input_embeddings()
-        model_dtype = tok_embed.weight.dtype
-        model_device = tok_embed.weight.device
-
-        # Token embeddings for the sequence
-        token_embeds = tok_embed(input_ids.to(model_device))
-
-        # Points to dtype/device
-        if points_X is None or points_y is None:
-            raise ValueError("points_X and points_y must be provided when using input embedder")
-        X = points_X.to(model_device, dtype=model_dtype)
-        y = points_y.to(model_device, dtype=model_dtype)
-
-        # Build prefix from embedder (batch, prefix_len, hidden)
-        prefix_embeds = self.input_embedder(X, y)
-
-        # Concatenate prefix + token embeddings
-        inputs_embeds = torch.cat([prefix_embeds, token_embeds], dim=1)
-
-        # Build attention mask if provided; otherwise assume all ones for tokens
-        if attention_mask is None:
-            attn_tokens = torch.ones(input_ids.shape, dtype=torch.long, device=model_device)
-        else:
-            attn_tokens = attention_mask.to(model_device)
-        prefix_len = prefix_embeds.shape[1]
-
-        # Adjust labels to match concatenated length by prepending -100 over prefix
-        labels_full = None
-        if labels is not None:
-            labels_tokens = labels.to(model_device)
-            ignore = torch.full((labels_tokens.shape[0], prefix_len), -100, dtype=labels_tokens.dtype, device=model_device)
-            labels_full = torch.cat([ignore, labels_tokens], dim=1)
-        else:
-            labels_tokens = None
-
-        # Prefix-LM attention masking: bidirectional over (prefix + input tokens), causal over target tokens
-        B = token_embeds.shape[0]
-        T_tokens = token_embeds.shape[1]
-        T_total = prefix_len + T_tokens
-
-        # Determine input length within tokens: positions that are real tokens (attn=1) and label-suppressed (-100)
-        # Shape: (B,)
-        if labels_tokens is not None:
-            is_input_token = (labels_tokens == -100) & (attn_tokens == 1)
-            input_lens = is_input_token.sum(dim=1)
-        else:
-            # Fallback: assume no input tokens (all target)
-            input_lens = torch.zeros(B, dtype=torch.long, device=model_device)
-
-        # Build a base causal lower-tri mask (allowed positions True)
-        causal = torch.tril(torch.ones((T_total, T_total), dtype=torch.bool, device=model_device))
-        allowed = causal.unsqueeze(0).unsqueeze(1).expand(B, 1, T_total, T_total).clone()
-
-        # Promote the prefix+input block to full bidirectional for each batch
-        # Compute per-batch boundary index in the concatenated sequence
-        input_end_full = prefix_len + input_lens  # (B,)
-        for b in range(B):
-            end = int(input_end_full[b].item())
-            if end > 0:
-                allowed[b, :, :end, :end] = True
-
-        # Mask out padded token keys entirely (they shouldn't be attended to)
-        key_valid_tokens = attn_tokens.bool()  # (B, T_tokens)
-        key_valid_prefix = torch.ones(B, prefix_len, dtype=torch.bool, device=model_device)
-        key_valid = torch.cat([key_valid_prefix, key_valid_tokens], dim=1)  # (B, T_total)
-        allowed = allowed & key_valid.view(B, 1, 1, T_total)
-
-        # Convert to additive mask: 0 for allowed, -inf for disallowed
-        neg_inf = torch.finfo(token_embeds.dtype).min if token_embeds.dtype.is_floating_point else -1e9
-        extended_attention_mask = torch.zeros_like(allowed, dtype=token_embeds.dtype)
-        extended_attention_mask = extended_attention_mask.masked_fill(~allowed, neg_inf)
-
-        # Also keep a 2D mask in case the backend ignores extended masks (used by some models)
-        attention_mask_full_2d = torch.cat([
-            torch.ones(B, prefix_len, dtype=attn_tokens.dtype, device=model_device),
-            attn_tokens
-        ], dim=1)
-
-        # Try passing the extended mask; some architectures (e.g., GPTNeo) accept 4D additive masks
-        try:
-            return self.base_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=extended_attention_mask,
-                labels=labels_full,
-                **kwargs,
-            )
-        except Exception:
-            # Fallback to 2D mask with default causal behavior if the model rejects 4D masks
-            return self.base_model(
-                inputs_embeds=inputs_embeds,
-                attention_mask=attention_mask_full_2d,
-                labels=labels_full,
-                **kwargs,
-            )
-
-    def generate(self, **kwargs):
-        return self.base_model.generate(**kwargs)
-
-    def gradient_checkpointing_enable(self, **kwargs):
-        """Enable gradient checkpointing on the base model."""
-        return self.base_model.gradient_checkpointing_enable(**kwargs)
-
-    def gradient_checkpointing_disable(self):
-        """Disable gradient checkpointing on the base model."""
-        return self.base_model.gradient_checkpointing_disable()
-
-
-def main(config, checkpoint=None, resume=False, reset=False):
+def main(config, checkpoint=None, resume=False, reset=False, overrides=None):
     # read config from a json config file
     with open(config, "r") as f:
         config = json.load(f)
+
+    # apply CLI overrides
+    applied = utils.parse_overrides(overrides)
+    for key, val in applied:
+        utils.apply_override(config, key, val)
 
     # set seeds
     random.seed(config["seed"])
@@ -223,7 +96,9 @@ def main(config, checkpoint=None, resume=False, reset=False):
         ]
     }
     num_added_tokens = tokenizer.add_special_tokens(special_tokens)
-    model.base_model.resize_token_embeddings(len(tokenizer))
+    # Resize embeddings on the full model so that input embeddings, lm_head, and
+    # tied weights are updated consistently across ranks under DDP.
+    model.resize_token_embeddings(len(tokenizer))
 
     # Precision will be controlled by TrainingArguments/Accelerate; avoid manual casting here
 
@@ -249,9 +124,32 @@ def main(config, checkpoint=None, resume=False, reset=False):
 
         # Wrap model with embedder
         base_model = model
-        model = ModelWithInputEmbedder(base_model, input_embedder)
-        print(f"Wrapped model with input embedder")
-        print(f"Total parameters (model + embedder): {model.base_model.num_parameters() + num_embedder_params:,}")
+        model = WithEmbedderForCausalLM(base_model.config, base_model, input_embedder)
+        # Persist embedder metadata into config for from_pretrained
+        model.update_embedder_config()
+        print(f"Wrapped model with input embedder (PreTrainedModel)")
+        print(f"Total parameters (model + embedder): {base_model.num_parameters() + num_embedder_params:,}")
+    elif input_embedder_type == "set":
+        print("Initializing SetPointEmbedder (set encoder) ...")
+        hidden_size = model.config.hidden_size
+        input_embedder = SetPointEmbedder(
+            max_input_dim=10,
+            hidden_size=hidden_size,
+            d_model=int(hidden_size // 2),
+            num_layers=2,
+            num_heads=8,
+            prefix_len=int(config.get("embedder_prefix_len", 16)),
+            fourier_features=int(config.get("embedder_fourier_features", 0)),
+            normalize=bool(config.get("embedder_normalize", True)),
+        )
+        num_embedder_params = sum(p.numel() for p in input_embedder.parameters())
+        print(f"Input embedder parameters: {num_embedder_params:,}")
+
+        base_model = model
+        model = WithEmbedderForCausalLM(base_model.config, base_model, input_embedder)
+        model.update_embedder_config()
+        print(f"Wrapped model with input embedder (PreTrainedModel)")
+        print(f"Total parameters (model + embedder): {base_model.num_parameters() + num_embedder_params:,}")
     elif input_embedder_type is not None:
         raise ValueError(f"Unknown input_embedder type: {input_embedder_type}")
 
@@ -294,7 +192,10 @@ def main(config, checkpoint=None, resume=False, reset=False):
         model.config.pad_token_id = tokenizer.pad_token_id
 
     # Reserve room for learned prefix if using embedder
-    reserved_prefix = input_embedder.max_points if input_embedder is not None else 0
+    if input_embedder is not None:
+        reserved_prefix = getattr(input_embedder, "prefix_len", getattr(input_embedder, "max_points", 0))
+    else:
+        reserved_prefix = 0
 
     # Training mode (onestep or direct)
     training_mode = config.get("training_mode", "onestep")
@@ -390,8 +291,6 @@ def main(config, checkpoint=None, resume=False, reset=False):
         desc="Tokenizing datasets"
     )
 
-    # Length distribution debug code removed per request.
-
     # Create data collator
     if input_embedder is not None:
         # Custom collator that loads per-example X/y and pads them, but leaves
@@ -443,12 +342,15 @@ def main(config, checkpoint=None, resume=False, reset=False):
                     max_vars = max(X.shape[1] for X in X_batch)
                     X_padded = torch.zeros(len(X_batch), max_points, max_vars, dtype=torch.float32)
                     y_padded = torch.zeros(len(y_batch), max_points, dtype=torch.float32)
+                    mask = torch.zeros(len(y_batch), max_points, dtype=torch.long)
                     for i, (X, y) in enumerate(zip(X_batch, y_batch)):
                         n_points, n_vars = X.shape
                         X_padded[i, :n_points, :n_vars] = X
                         y_padded[i, :n_points] = y
+                        mask[i, :n_points] = 1
                     batch["points_X"] = X_padded
                     batch["points_y"] = y_padded
+                    batch["points_mask"] = mask
 
                 return batch
 
@@ -543,40 +445,25 @@ def main(config, checkpoint=None, resume=False, reset=False):
     # Inject direct-mode evaluation metrics via a custom Trainer subclass
     expr_parser = ExpressionParser()
 
-    def _translate_e2e_expr(expr_text: str) -> str:
-        s = expr_text
-        s = s.replace(' add ', ' + ').replace(' sub ', ' - ').replace(' mul ', ' * ').replace(' div ', ' / ')
-        s = s.replace(' add', ' +').replace(' sub', ' -').replace(' mul', ' *').replace(' div', ' /')
-        s = s.replace('add ', '+ ').replace('sub ', '- ').replace('mul ', '* ').replace('div ', '/ ')
-        s = s.replace('x_', 'x')
-        return s
-
-    def _safe_parse(expr_text: str):
-        try:
-            return expr_parser.parse(_translate_e2e_expr(expr_text))
-        except Exception:
-            return None
-
-    def _r2_and_acc(y_true: np.ndarray, y_pred: np.ndarray, tol_mse: float = 1e-12):
-        y_true = np.asarray(y_true).reshape(-1)
-        y_pred = np.asarray(y_pred).reshape(-1)
-        if y_true.shape != y_pred.shape or y_true.size == 0:
-            return 0.0, 0.0, np.inf
-        mask = np.isfinite(y_true) & np.isfinite(y_pred)
-        if not np.any(mask):
-            return 0.0, 0.0, np.inf
-        yt = y_true[mask]
-        yp = y_pred[mask]
-        mse = float(np.mean((yt - yp) ** 2))
-        denom = float(np.sum((yt - yt.mean()) ** 2))
-        if denom <= 1e-20:
-            r2 = 1.0 if mse < tol_mse else 0.0
-        else:
-            r2 = 1.0 - float(np.sum((yt - yp) ** 2)) / denom
-        acc = 1.0 if mse < tol_mse else 0.0
-        return r2, acc, mse
-
     class DirectTrainer(Trainer):
+        def save_model(self, output_dir: Optional[str] = None, _internal_call: bool = True):
+            """Defer to PreTrainedModel.save_pretrained for full wrapper checkpoints.
+
+            This ensures checkpoints contain both base_model and input_embedder weights
+            for correct best-model loading and DDP resume. Also save tokenizer for
+            convenience.
+            """
+            output_dir = output_dir or self.args.output_dir
+            # Save the full wrapper model (keeps .bin to avoid tied-weight safetensors issues)
+            safe_serialization = False
+            self.model.save_pretrained(output_dir, safe_serialization=safe_serialization)
+            # Save tokenizer alongside
+            if getattr(self, "tokenizer", None) is not None:
+                try:
+                    self.tokenizer.save_pretrained(output_dir)
+                except Exception:
+                    pass
+
         def evaluate(self, eval_dataset=None, ignore_keys=None, metric_key_prefix: str = "eval"):
             metrics = super().evaluate(eval_dataset=eval_dataset, ignore_keys=ignore_keys, metric_key_prefix=metric_key_prefix)
             if training_mode != "direct":
@@ -615,14 +502,14 @@ def main(config, checkpoint=None, resume=False, reset=False):
                         eos_token_id=tok.eos_token_id,
                     )
                     pred_text = tok.decode(out_ids[0], skip_special_tokens=True).strip()
-                node = _safe_parse(pred_text)
+                node = safe_parse_e2e(expr_parser, pred_text)
                 if node is None:
                     r2, acc, mse = 0.0, 0.0, float("inf")
                 else:
                     X_np = X.squeeze(0).detach().cpu().numpy()
                     y_true = y.squeeze(0).detach().cpu().numpy()
                     y_pred = node.evaluate(X_np)
-                    r2, acc, mse = _r2_and_acc(y_true, y_pred)
+                    r2, acc, mse = r2_acc_mse(y_true, y_pred)
                 r2s.append(r2)
                 accs.append(acc)
                 mses.append(mse)
@@ -636,24 +523,24 @@ def main(config, checkpoint=None, resume=False, reset=False):
                 self.log(logs)
                 metrics.update(logs)
 
-            # Ensure eval_loss exists for metric_for_best_model logic, even when drop_last removes all batches
-            if "eval_loss" not in metrics and len(ds) > 0:
-                try:
-                    # Build a small batch manually via the collator to avoid DataLoader drop_last
-                    take = min(8, len(ds))
-                    examples = [ds[i] for i in range(take)]
-                    batch = self.data_collator(examples)
-                    batch = self._prepare_inputs(batch)
-                    with torch.no_grad():
-                        loss = self.compute_loss(self.model, batch)
-                        if isinstance(loss, tuple):
-                            loss = loss[0]
-                        loss_val = float(loss.detach().cpu().item())
-                    metrics["eval_loss"] = loss_val
-                    self.log({"eval_loss": loss_val})
-                except Exception:
-                    # If anything goes wrong, leave eval_loss absent
-                    pass
+            # # Ensure eval_loss exists for metric_for_best_model logic, even when drop_last removes all batches
+            # if "eval_loss" not in metrics and len(ds) > 0:
+            #     try:
+            #         # Build a small batch manually via the collator to avoid DataLoader drop_last
+            #         take = min(8, len(ds))
+            #         examples = [ds[i] for i in range(take)]
+            #         batch = self.data_collator(examples)
+            #         batch = self._prepare_inputs(batch)
+            #         with torch.no_grad():
+            #             loss = self.compute_loss(self.model, batch)
+            #             if isinstance(loss, tuple):
+            #                 loss = loss[0]
+            #             loss_val = float(loss.detach().cpu().item())
+            #         metrics["eval_loss"] = loss_val
+            #         self.log({"eval_loss": loss_val})
+            #     except Exception:
+            #         # If anything goes wrong, leave eval_loss absent
+            #         pass
             return metrics
 
     trainer = DirectTrainer(
@@ -664,6 +551,21 @@ def main(config, checkpoint=None, resume=False, reset=False):
         eval_dataset=tokenized_datasets["val"],
         tokenizer=tokenizer,
     )
+
+    # Save resolved config for reproducibility (rank-safe)
+    if accelerator.is_main_process:
+        try:
+            os.makedirs(training_args.output_dir, exist_ok=True)
+            resolved_path = os.path.join(training_args.output_dir, "config.resolved.json")
+            with open(resolved_path, "w") as f:
+                json.dump({
+                    "argv": utils.get_script_execution_command(),
+                    "config": config,
+                    "overrides": [f"{k}={v}" for k, v in applied],
+                }, f, indent=2)
+            print(f"Saved resolved config to {resolved_path}")
+        except Exception as e:
+            print(f"Warning: failed to save resolved config: {e}")
 
     print("Starting training...")
     if resume:
@@ -676,22 +578,26 @@ def main(config, checkpoint=None, resume=False, reset=False):
     else:
         trainer.train()
 
-    # Save the final model bundle via utils (base model + tokenizer + optional embedder)
-    from utils import save_model_bundle
+    # Save the full wrapper model as a standard HF directory
     final_dir = os.path.join(training_args.output_dir, "final_model")
     os.makedirs(final_dir, exist_ok=True)
-    base_model_to_save = model.base_model if hasattr(model, "base_model") else model
-    save_model_bundle(final_dir, base_model_to_save, tokenizer, input_embedder=input_embedder, safe_serialization=False)
+    # Ensure config carries embedder metadata
+    if hasattr(model, "update_embedder_config"):
+        model.update_embedder_config()
+    model.save_pretrained(final_dir, safe_serialization=False)
+    tokenizer.save_pretrained(final_dir)
     print(f"Model bundle saved to {final_dir}")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("--config", type=str, help="Path to config file", default='training/onestep-s.json')
+    parser.add_argument("--config", "-c", type=str, help="Path to config file", default='training/onestep-s.json')
     parser.add_argument("--resume", action="store_true", help="Resume training from a checkpoint path")
     parser.add_argument("--checkpoint", type=str, default=None, help="Checkpoint directory to resume from")
     parser.add_argument("--reset", action="store_true", help="Initialize model weights from a pretrained checkpoint for fine-tuning")
+    parser.add_argument("-o", "--set", action="append", default=[], help="Override config value: key=val (repeatable). Use dot paths and [i] indices.")
 
     args = parser.parse_args()
 
-    main(config=args.config, checkpoint=args.checkpoint, resume=args.resume, reset=args.reset)
+    print(utils.get_script_execution_command())
+    main(config=args.config, checkpoint=args.checkpoint, resume=args.resume, reset=args.reset, overrides=args.set)

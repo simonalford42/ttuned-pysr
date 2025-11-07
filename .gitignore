@@ -48,7 +48,8 @@ stream-of-search/
 
 data/
 out/
-training/checkpoints/
 wandb/
 datasets/
+checkpoints/
+
 

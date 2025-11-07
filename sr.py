@@ -7,8 +7,14 @@ from datetime import datetime
 from problems import ULTRA_SIMPLE_PROBLEMS, SIMPLE_PROBLEMS, ALL_SIMPLE_PROBLEMS
 import torch
 from transformers import AutoTokenizer, AutoModelForCausalLM
+from modules import WithEmbedderForCausalLM
 from format_utils import format_context, format_population_with_fitness, format_inference_input
 from typing import List, Dict, Tuple
+import argparse
+import gzip
+import pickle
+from utils import get_operators
+from typing import Callable, Tuple, Dict, Any
 
 
 class Node:
@@ -626,9 +632,11 @@ class NeuralSR(BasicSR):
         self.autoregressive = autoregressive
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        # Load model bundle (model, tokenizer, optional embedder) via utils
-        from utils import load_model_bundle
-        self.model, self.tokenizer, self.embedder = load_model_bundle(model_path, device=self.device)
+        # Load full wrapper model directly (embedder included)
+        self.tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        self.model = WithEmbedderForCausalLM.from_pretrained(model_path, trust_remote_code=True)
+        self.model.to(self.device).eval()
+        self.embedder = getattr(self.model, "input_embedder", None)
         self.uses_embedder = self.embedder is not None
 
         # Initialize expression parser
@@ -695,7 +703,7 @@ class NeuralSR(BasicSR):
         text = text.strip()
         return self.expr_parser.parse(text)
 
-    def generate_new_population(self, population, fitnesses, best_individual, num_vars, generation=0):
+    def generate_new_population(self, population, fitnesses, best_individual, num_vars, generation=0, verbose=False):
         """Generate new population using neural model predictions.
 
         Returns (new_population, heritages), where heritages is a list-of-list of parent
@@ -705,11 +713,11 @@ class NeuralSR(BasicSR):
         - Fallback evolution children: [parent_ix] or [parent1_ix, parent2_ix]
         """
         if self.autoregressive:
-            return self.generate_new_population_autoregressive(population, fitnesses, best_individual, num_vars, generation)
+            return self.generate_new_population_autoregressive(population, fitnesses, best_individual, num_vars, generation, verbose)
         else:
-            return self.generate_new_population_onestep(population, fitnesses, best_individual, num_vars, generation)
+            return self.generate_new_population_onestep(population, fitnesses, best_individual, num_vars, generation, verbose)
 
-    def generate_new_population_onestep(self, population, fitnesses, best_individual, num_vars, generation=0):
+    def generate_new_population_onestep(self, population, fitnesses, best_individual, num_vars, generation=0, verbose=False):
         """Generate new population using one-step model predictions with parallel sampling.
 
         Returns (new_population, heritages), where heritages is a list-of-list of parent
@@ -734,7 +742,6 @@ class NeuralSR(BasicSR):
 
         # Create input prompt using shared formatting and prepare inputs (embedder-aware)
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
-        from embedder_infer import make_onestep_inputs
         inputs, decode_fn = make_onestep_inputs(
             self.model, self.tokenizer, input_text,
             embedder=self.embedder if self.uses_embedder else None,
@@ -781,7 +788,8 @@ class NeuralSR(BasicSR):
             all_predicted_targets.append(first_expr if first_expr else generated)
 
         # Print all predicted targets on one line separated by spaces
-        # print("PREDICTED TARGETS:", " ".join(all_predicted_targets))
+        if verbose:
+            print("PREDICTED TARGETS:", " ".join(all_predicted_targets))
 
         # Now parse and add to population
         for i, first_expr in enumerate(all_predicted_targets):
@@ -805,7 +813,7 @@ class NeuralSR(BasicSR):
         # print(' '.join([str(e) for e in new_population]))
         return new_population, heritages
 
-    def generate_new_population_autoregressive(self, population, fitnesses, best_individual, num_vars, generation=0):
+    def generate_new_population_autoregressive(self, population, fitnesses, best_individual, num_vars, generation=0, verbose=False):
         """Generate new population using autoregressive model prediction.
 
         Autoregressive models predict the entire next population in one generation pass,
@@ -827,7 +835,6 @@ class NeuralSR(BasicSR):
 
         # Create input prompt using shared formatting and prepare inputs (embedder-aware)
         input_text = format_inference_input(self.tokenizer.bos_token, context, population_str)
-        from embedder_infer import make_onestep_inputs
         inputs, decode_fn = make_onestep_inputs(
             self.model, self.tokenizer, input_text,
             embedder=self.embedder if getattr(self, 'uses_embedder', False) else None,
@@ -856,7 +863,8 @@ class NeuralSR(BasicSR):
             if tok in generated_text:
                 generated_text = generated_text.split(tok, 1)[0].strip()
 
-        print(f"AUTOREG PREDICTED: {generated_text}")
+        if verbose:
+            print(f"AUTOREG PREDICTED: {generated_text}")
 
         # Parse the generated expressions by grouping balanced parentheses
         # Expressions are separated by spaces, but spaces can appear inside expressions.
@@ -921,34 +929,6 @@ class NeuralSR(BasicSR):
         self._X = X
         self._y = y
         return super().fitness(individual, X, y)
-
-
-if __name__ == "__main__":
-    # Test ultra-simple first
-    ultra_results = test_on_ultra_simple()
-
-    print("\n" + "="*60)
-    print("ULTRA-SIMPLE RESULTS SUMMARY:")
-    for result in ultra_results:
-        status = "✓ Perfect" if result['mse'] < 1e-10 else "⚠ Poor"
-        print(f"{result['problem']}: MSE={result['mse']:.2e}, Size={result['size']} {status}")
-
-    # Test regular problems
-    print("\n")
-    simple_results = test_on_simple()
-
-    print("\n" + "="*60)
-    print("SIMPLE PROBLEMS RESULTS SUMMARY:")
-    for result in simple_results:
-        if result['mse'] < 0.01:
-            status = "✓ Excellent"
-        elif result['mse'] < 1.0:
-            status = "⚠ Good"
-        elif result['mse'] < 10.0:
-            status = "⚠ Poor"
-        else:
-            status = "❌ Failed"
-        print(f"{result['problem']}: MSE={result['mse']:.2e}, Size={result['size']} {status}")
 
 
 class BatchedNeuralSR:
@@ -1268,3 +1248,141 @@ class BatchedNeuralSR:
             'heritages': heritages,
         }
         trajectory.append(state)
+
+def make_onestep_inputs(base_model,
+                        tokenizer,
+                        prompt_text: str,
+                        embedder=None,
+                        X=None,
+                        y=None,
+                        device=None) -> Tuple[Dict[str, Any], Callable[[torch.Tensor], str]]:
+    """Prepare inputs for generation. Returns (inputs_dict, decode_fn).
+
+    - If embedder is None: tokenizes `prompt_text` and uses input_ids; decode_fn slices off prompt length.
+    - If embedder is provided: builds prefix from (X, y) and concatenates with token embeddings; decode_fn decodes full ids.
+    """
+    if device is None:
+        device = next(base_model.parameters()).device
+
+    if embedder is None:
+        tok = tokenizer(prompt_text, return_tensors="pt").to(device)
+        prompt_len = tok["input_ids"].shape[1]
+
+        def decode_fn(out_ids: torch.Tensor) -> str:
+            # out_ids can be 1D ([T]) or 2D ([1, T]) depending on how it's sliced upstream
+            if out_ids.dim() == 1:
+                gen_ids = out_ids[prompt_len:]
+            else:
+                gen_ids = out_ids[0, prompt_len:]
+            return tokenizer.decode(gen_ids, skip_special_tokens=True).strip()
+
+        return tok, decode_fn
+
+    # With embedder: build prefix from (X, y) and concatenate with token embeddings
+    assert X is not None and y is not None, "X and y are required when using an input embedder"
+    with torch.no_grad():
+        X_t = torch.as_tensor(X, dtype=torch.float32, device=device)
+        y_t = torch.as_tensor(y, dtype=torch.float32, device=device)
+        if X_t.dim() == 2:
+            X_t = X_t.unsqueeze(0)
+        if y_t.dim() == 1:
+            y_t = y_t.unsqueeze(0)
+        prefix = embedder(X_t, y_t)  # (B, P, H)
+        tok = tokenizer(prompt_text, return_tensors="pt").to(device)
+        tok_emb = base_model.get_input_embeddings()(tok["input_ids"])  # (B, T, H)
+        inputs_embeds = torch.cat([prefix, tok_emb], dim=1)  # (B, P+T, H)
+        attn_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=device)
+
+    def decode_fn_full(out_ids: torch.Tensor) -> str:
+        # out_ids can be 1D ([T]) or 2D ([1, T]) depending on how it's sliced upstream
+        ids = out_ids if out_ids.dim() == 1 else out_ids[0]
+        return tokenizer.decode(ids, skip_special_tokens=True).strip()
+
+    return {"inputs_embeds": inputs_embeds, "attention_mask": attn_mask}, decode_fn_full
+
+def make_direct_inputs(base_model,
+                       tokenizer,
+                       embedder,
+                       X,
+                       y,
+                       device=None) -> Tuple[Dict[str, Any], Callable[[torch.Tensor], str]]:
+    """Prepare inputs for direct generation (prefix + BOS only). Returns (inputs_dict, decode_fn)."""
+    if device is None:
+        device = next(base_model.parameters()).device
+    with torch.no_grad():
+        X_t = torch.as_tensor(X, dtype=torch.float32, device=device)
+        y_t = torch.as_tensor(y, dtype=torch.float32, device=device)
+        if X_t.dim() == 2:
+            X_t = X_t.unsqueeze(0)
+        if y_t.dim() == 1:
+            y_t = y_t.unsqueeze(0)
+        prefix = embedder(X_t, y_t)
+        bos_id = tokenizer.bos_token_id if tokenizer.bos_token_id is not None else tokenizer.eos_token_id
+        bos = torch.tensor([[bos_id]], dtype=torch.long, device=device)
+        bos_embed = base_model.get_input_embeddings()(bos)
+        inputs_embeds = torch.cat([prefix, bos_embed], dim=1)
+        attn_mask = torch.ones(inputs_embeds.shape[:2], dtype=torch.long, device=device)
+
+    def decode_fn(out_ids: torch.Tensor) -> str:
+        return tokenizer.decode(out_ids[0], skip_special_tokens=True).strip()
+
+if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Fine-grained comparison of neural vs basic SR")
+    parser.add_argument("--checkpoint", "-c", type=str,
+                       default="training/checkpoints/onestep-full_20250811_145316/final_model",
+                       help="Path to trained model checkpoint")
+    parser.add_argument("--problem", "-p", type=int, default=0,
+                       help="Problem index to test (default: 0)")
+    parser.add_argument("--expressions_file", "-e", type=str, default="datasets/expressions/arith_100_c05_20251029_144200.pkl.gz",
+                       help="Path to file with expressions to test (default: None)")
+    parser.add_argument("--max_generations", "-g", type=int, default=10,
+                       help="Maximum number of generations (default: 1000)")
+    parser.add_argument("--operator_set", "-o", type=str, default="arith", choices=["arith", "full"],
+                        help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
+    args = parser.parse_args()
+
+
+    if args.expressions_file is not None:
+        with gzip.open(args.expressions_file, 'rb') as f:
+            expressions = pickle.load(f)
+
+        problem = expressions['expressions'][args.problem]
+        X = problem['X_data']
+        y = problem['y_data']
+        expr = problem['expression']
+    else:
+        from problems import HARDER_PROBLEMS
+        problem = HARDER_PROBLEMS[args.problem]
+        X, y = problem(seed=42)
+
+    binary_operators, unary_operators = get_operators(args.operator_set)
+
+    neural_sr = NeuralSR(
+        model_path=args.checkpoint,
+        population_size=20,
+        num_generations=1,  # We'll run one generation at a time
+        max_depth=4,
+        max_size=15,
+        binary_operators=binary_operators,
+        unary_operators=unary_operators,
+    )
+
+    num_vars = X.shape[1]
+    neural_population = neural_sr.create_initial_population(num_vars)
+    neural_best_fitness = -float('inf')
+    neural_best_individual = None
+
+    # Run generation by generation
+    for generation in range(args.max_generations):
+        # Evaluate Neural SR population
+        neural_fitnesses = np.array([neural_sr.fitness(ind, X, y) for ind in neural_population])
+        neural_current_best_idx = np.argmax(neural_fitnesses)
+        neural_current_best_fitness = neural_fitnesses[neural_current_best_idx]
+
+        if neural_current_best_fitness > neural_best_fitness:
+            neural_best_fitness = neural_current_best_fitness
+            neural_best_individual = neural_population[neural_current_best_idx].copy()
+
+        # Generate new populations for next iteration
+        if generation < args.max_generations - 1:  # Don't generate if this is the last iteration
+            neural_population, _ = neural_sr.generate_new_population(neural_population, neural_fitnesses, neural_best_individual, num_vars, generation + 1, verbose=True)

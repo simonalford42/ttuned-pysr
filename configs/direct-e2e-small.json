@@ -1,24 +1,24 @@
 {
-  "name": "direct-test",
+  "name": "direct-e2e-small",
   "seed": 42,
   "training_mode": "direct",
   "input_embedder": "e2e",
   "data_dir": "",
-  "train_file": "datasets/training/arith_100k_b4_20251030_161947_direct.jsonl",
-  "val_file": "datasets/training/arith_100_b4_20251030_163141_direct.jsonl",
-  "model_config": "training/configs/gpt-neo-tiny.json",
+  "train_file": "datasets/training/arith_10k_b3_20251030_161318_direct.jsonl",
+  "val_file": "datasets/training/arith_100_b3_20251030_163147_direct.jsonl",
+  "model_config": "configs/gpt-neo-tiny.json",
   "num_train": -1,
   "num_val": -1,
   "context_length": 1024,
   "training_args": {
-    "output_dir": "training/checkpoints/direct",
+    "output_dir": "training/checkpoints/direct-e2e-small",
     "overwrite_output_dir": true,
-    "num_train_epochs": 40,
+    "num_train_epochs": 0.1,
     "per_device_train_batch_size": 8,
     "per_device_eval_batch_size": 8,
     "gradient_accumulation_steps": 4,
     "warmup_steps": 400,
-    "learning_rate": 5e-4,
+    "learning_rate": 3e-4,
     "weight_decay": 0.01,
     "lr_scheduler_type": "cosine",
     "logging_steps": 100,
@@ -42,3 +42,4 @@
     "dir": "./wandb"
   }
 }
+

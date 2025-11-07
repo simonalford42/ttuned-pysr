@@ -9,19 +9,32 @@ from sr import BasicSR, NeuralSR
 from problems import HARDER_PROBLEMS
 import argparse
 from utils import get_operators
+import pickle
+import gzip
 
 
-def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[], autoregressive=False, non_interactive=False):
+def compare_neural_vs_basic_fine_grained(checkpoint_path, problem_idx=0, max_generations=1000, binary_operators=['add', 'sub', 'mul'], unary_operators=[], autoregressive=False, non_interactive=False, expressions_file=None):
     """Compare neural SR vs basic SR generation by generation with user input"""
-    problem = HARDER_PROBLEMS[problem_idx]
-    X, y = problem(seed=42)
+    if expressions_file is not None:
+        with gzip.open(expressions_file, 'rb') as f:
+            expressions = pickle.load(f)
+
+        problem = expressions['expressions'][problem_idx]
+        X = problem['X_data']
+        y = problem['y_data']
+        expr = problem['expression']
+        print(f"Loaded expression from {expressions_file}: {expr}")
+    else:
+        problem = HARDER_PROBLEMS[problem_idx]
+        X, y = problem(seed=42)
+
     num_vars = X.shape[1]
 
     print(f"=== Fine-Grained Comparison: Neural vs Basic SR ===")
-    print(f"Problem: {problem.__name__}")
-    print(f"Description: {problem.__doc__}")
-    print(f"Data shape: X={X.shape}, y={y.shape}")
-    print(f"Model type: {'Autoregressive' if autoregressive else 'One-step'}")
+    # print(f"Problem: {problem.__name__}")
+    # print(f"Description: {problem.__doc__}")
+    # print(f"Data shape: X={X.shape}, y={y.shape}")
+    # print(f"Model type: {'Autoregressive' if autoregressive else 'One-step'}")
     print(f"Press Enter after each generation to proceed...\n")
 
     # Initialize both algorithms
@@ -156,13 +169,15 @@ def main():
                        help="Path to trained model checkpoint")
     parser.add_argument("--problem", type=int, default=0,
                        help="Problem index to test (default: 0)")
-    parser.add_argument("--max-generations", type=int, default=1000,
+    parser.add_argument("--expressions_file", type=str, default=None,
+                       help="Path to file with expressions to test (default: None)")
+    parser.add_argument("--max_generations", type=int, default=1000,
                        help="Maximum number of generations (default: 1000)")
     parser.add_argument("--operator_set", type=str, default="arith", choices=["arith", "full"],
                         help="Operator set: 'arith' (add/sub/mul) or 'full' (all operators)")
     parser.add_argument("--autoregressive", action="store_true",
                         help="Use autoregressive model (default: one-step model)")
-    parser.add_argument("--non-interactive", action="store_true",
+    parser.add_argument("--non_interactive", action="store_true",
                         help="Run without waiting for input between generations")
 
     args = parser.parse_args()
@@ -177,6 +192,7 @@ def main():
         unary_operators=unary_operators,
         autoregressive=args.autoregressive,
         non_interactive=args.non_interactive,
+        expressions_file=args.expressions_file
     )
     if result:
         print("\n✓ Fine-grained comparison completed!")

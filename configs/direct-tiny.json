@@ -6,7 +6,7 @@
   "data_dir": "",
   "train_file": "datasets/training/arith_1k_b1_20251030_153044_direct.jsonl",
   "val_file": "datasets/training/arith_1_b1_20251030_161535_direct.jsonl",
-  "model_config": "training/configs/gpt-neo-tiny.json",
+  "model_config": "configs/gpt-neo-tiny.json",
   "num_train": -1,
   "num_val": -1,
   "context_length": 1024,
