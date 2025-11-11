@@ -20,7 +20,7 @@ import datetime
 from sr import BasicSR
 
 
-def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', sample_fraction=1.0, ancestors_only=False, expressions_file=None):
+def convert_basicsr_to_one_step_format(input_file, output_file, context_type='basic', sample_fraction=1.0, ancestors_only=False, expressions_file=None, dagger=False):
     """
     Convert BasicSR trajectory file to one-step prediction format.
     Each trajectory becomes multiple training examples (one for each generation transition).
@@ -100,7 +100,10 @@ def convert_basicsr_to_one_step_format(input_file, output_file, context_type='ba
             population_line = format_population_with_fitness(current_expressions, current_fitnesses)
 
             # Get target expressions for next generation
-            target_expressions = next_gen["expressions"]
+            if dagger:
+                target_expressions = next_gen["dagger_expressions"]
+            else:
+                target_expressions = next_gen["expressions"]
 
             # Create one training example for each target expression
             if sample_fraction < 1.0:
@@ -326,7 +329,7 @@ def split_train_val(input_file, train_file, val_file, val_split=0.1, seed=42):
     return len(train_data), len(val_data)
 
 
-def convert_and_make_split(input_file, context_type, sample_fraction, split, ancestors_only, expressions_file, mode):
+def convert_and_make_split(input_file, context_type, sample_fraction, split, ancestors_only, expressions_file, mode, dagger=False):
     # Generate output filename from input filename
     input_path = Path(input_file)
     input_filename = input_path.stem  # Remove extension
@@ -352,7 +355,7 @@ def convert_and_make_split(input_file, context_type, sample_fraction, split, anc
         output_filename = f"{input_filename}{frac_str}{anc_str}.jsonl"
         output_file = output_dir / output_filename
         # Convert trajectories to one-step format
-        convert_basicsr_to_one_step_format(input_file, str(output_file), context_type, sample_fraction, ancestors_only, expressions_file)
+        convert_basicsr_to_one_step_format(input_file, str(output_file), context_type, sample_fraction, ancestors_only, expressions_file, dagger=dagger)
 
     if split:
         base_name = str(output_file).replace('.jsonl', '')
@@ -511,7 +514,7 @@ def add_expert_labels_to_traces(input_file: str, seed: int = 42) -> str:
 
     # Update metadata to indicate DAgger labels have been added
     metadata['dagger'] = True
-    metadata['dagger_relabel_timestamp'] = datetime.now().isoformat()
+    metadata['dagger_relabel_timestamp'] = datetime.datetime.now().isoformat()
 
     # Save back to same file
     with gzip.open(input_file, 'wb') as f:
@@ -538,6 +541,7 @@ def main():
     mode_group.add_argument("--autoreg", action="store_true", help="Use autoregressive next-generation targets (input must be trajectory file)")
     mode_group.add_argument("--direct", action="store_true", help="Convert expressions to direct prediction format (input must be expressions file)")
     mode_group.add_argument("--dagger_relabel", action="store_true", help="Dagger relabelling")
+    mode_group.add_argument("--dagger", action="store_true", help="Dagger")
 
     args = parser.parse_args()
 
@@ -556,6 +560,7 @@ def main():
         ancestors_only=args.ancestors_only,
         expressions_file=args.expressions_file,
         mode=mode,
+        dagger=args.dagger,
     )
 
 

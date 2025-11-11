@@ -1,21 +1,83 @@
 #!/bin/bash
 
+# sbatch -J ttsr --partition ellis --time=72:00:00 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/onestep-tiny.json
+# sbatch -J dagger --partition ellis --time=72:00:00 run.sh accelerate launch --config_file configs/accelerate1.yaml dagger.py --original_dataset datasets/training/gen100_20251106_123123_arith_1k_c05_20251016_214231_ancs.jsonl --num_expressions 40 --num_generations 50
+
+# 11/10 – Third round: FeatureSetEmbedder experiments (features × pool)
+# Base config: configs/direct-featurepool-small.json
+# Feature sets:
+#   RAW      = -o embedder_use_raw_xy=true  -o embedder_use_x_phases=false -o embedder_use_logx_phases=false
+#   PHASES   = -o embedder_use_raw_xy=false -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+#   COMBINED = -o embedder_use_raw_xy=true  -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+# Pools: encoder | dsum | xattn (set via -o embedder_pool_type=...)
+
+# 9 core runs (3 features × 3 pools)
+# sbatch -J fe_raw_enc   run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=encoder  -o embedder_use_raw_xy=true  -o embedder_use_x_phases=false -o embedder_use_logx_phases=false
+# sbatch -J fe_raw_dsum  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=dsum     -o embedder_use_raw_xy=true  -o embedder_use_x_phases=false -o embedder_use_logx_phases=false
+sbatch -J fe_raw_xattn run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=xattn    -o embedder_use_raw_xy=true  -o embedder_use_x_phases=false -o embedder_use_logx_phases=false
+
+# sbatch -J fe_phs_enc   run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=encoder  -o embedder_use_raw_xy=false -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+sbatch -J fe_phs_dsum  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=dsum     -o embedder_use_raw_xy=false -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+sbatch -J fe_phs_xattn run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=xattn    -o embedder_use_raw_xy=false -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+
+sbatch -J fe_cmb_enc   run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=encoder  -o embedder_use_raw_xy=true  -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+sbatch -J fe_cmb_dsum  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=dsum     -o embedder_use_raw_xy=true  -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+sbatch -J fe_cmb_xattn run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=xattn    -o embedder_use_raw_xy=true  -o embedder_use_x_phases=true  -o embedder_use_logx_phases=true
+
+# +1 sanity: add poly block to combined+encoder
+sbatch -J fe_cmb_enc_poly run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-featurepool-small.json -o embedder_pool_type=encoder -o embedder_use_raw_xy=true -o embedder_use_x_phases=true -o embedder_use_logx_phases=true -o embedder_include_poly=true
+
+# 11/9 – Direct SetPointEmbedder experiment suite (schedules, prefix, capacity, normalization)
+
+# Best-so-far baseline (normalize=false, prefix=16). Scheduler comparisons + longer training
+# sbatch -J ds4c run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o training_args.lr_scheduler_type=constant_with_warmup -o training_args.num_train_epochs=80
+# sbatch -J ds4r run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o training_args.lr_scheduler_type=cosine_with_restarts -o training_args.num_train_epochs=80
+
+# Seed stability (best config seeds)
+# sbatch -J ds4s43 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o seed=43
+
+# Prefix budget (no-normalize)
+# sbatch -J ds4p8  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_prefix_len=8
+# sbatch -J ds4p24 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_prefix_len=24
+
+# Capacity sweeps (no-normalize)
+# d_model
+# sbatch -J ds4d64 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_d_model=64
+# num_layers
+# sbatch -J ds4l1  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_num_layers=1
+# sbatch -J ds4l3  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_num_layers=3
+# num_heads
+# sbatch -J ds4h4  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_num_heads=4
+
+# Fourier features revisit (no-normalize)
+# sbatch -J ds4f2 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_fourier_features=2
+# sbatch -J ds4f4 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false -o embedder_fourier_features=4
+
+# Normalization ablations that preserve scale info
+# Mean-only (demean)
+# sbatch -J ds_norm_center run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=true -o embedder_norm_center_only=true -o embedder_norm_scale_only=false
+# Scale-only (divide by std)
+# sbatch -J ds_norm_scale  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=true -o embedder_norm_center_only=false -o embedder_norm_scale_only=true
+# Normalize + append stats tokens (means/stds)
+# sbatch -J ds_norm_stats  run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=true -o embedder_append_stats=true
+
 # 11/3
-# sbatch -J ttsr --partition ellis --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/onestep-tiny.json
+# sbatch -J ttsr --partition ellis run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/onestep-tiny.json
 
-# Direct prediction (Set vs E2E baseline)
-# fourier features 4, yes normalization
-sbatch -J ttsr --partition gpu run.sh accelerate launch --config_file configs/accelerate2.yaml train.py --config configs/onestep-tiny.json
-# sbatch -J direct_e2e_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-e2e-small.json
-
-# normalization or not, fourier features none or 2
-# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json
-# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small2.json
-# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small3.json
-
+### First round of embedder architecture experiments
+# Direct prediction: E2E baseline,
+# sbatch -J e2e run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-e2e-small.json
+# default direct set (prefix_len=16, fourier_features=0, normalize=True)
+# sbatch -J ds1 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json
 # prefix length 8 or 24
-# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json
-# sbatch -J direct_set_small --partition gpu run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small2.json
+# sbatch -J ds2 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_prefix_len=8
+# sbatch -J ds3 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_prefix_len=24
+# # no normalization
+# sbatch -J ds4 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_normalize=false
+# # fourier features 2 or 4
+# sbatch -J ds5 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_fourier_features=2
+# sbatch -J ds6 run.sh accelerate launch --config_file configs/accelerate1.yaml train.py --config configs/direct-set-small.json -o embedder_fourier_features=4
+
 
 # sbatch -J ttsr --partition gpu run.sh accelerate launch --config_file configs/accelerate.yaml train.py --config configs/onestep-tiny2.json
 # sbatch -J direct --partition gpu --gres=gpu:nvidia_rtx_a6000:1 run.sh accelerate launch --config_file training/configs/accelerate1.yaml train.py --config training/configs/direct.json

@@ -1,6 +1,7 @@
 {
   "name": "onestep-tiny",
   "seed": 42,
+  "input_embedder": "e2e",
   "data_dir": "",
   "train_file": "datasets/training/dagger_combined.jsonl",
   "val_file": "datasets/training/gen50_arith_10_c05_20251016_220146.jsonl",

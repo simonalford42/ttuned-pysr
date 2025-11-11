@@ -2,8 +2,7 @@
   "name": "onestep-tiny",
   "seed": 42,
   "data_dir": "",
-  "_train_file": "datasets/training/gen100_20251106_123123_arith_1k_c05_20251016_214231_ancs.jsonl",
-  "train_file": "datasets/training/gen10_20251030_221355_arith_50_c05_20251023_215035_ancs.jsonl",
+  "train_file": "datasets/training/gen100_20251106_123123_arith_1k_c05_20251016_214231_ancs.jsonl",
   "val_file": "datasets/training/gen10_20251030_221355_arith_50_c05_20251023_215035_ancs.jsonl",
   "model_config": "configs/gpt-neo-tiny.json",
   "num_train": -1,
@@ -12,7 +11,7 @@
   "training_args": {
     "output_dir": "checkpoints/tiny",
     "overwrite_output_dir": true,
-    "num_train_epochs": 1,
+    "num_train_epochs": 0.1,
     "per_device_train_batch_size": 4,
     "per_device_eval_batch_size": 4,
     "gradient_accumulation_steps": 4,

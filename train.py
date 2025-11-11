@@ -23,7 +23,7 @@ import wandb
 from format_utils import format_input_part, format_target_part
 import utils
 from datetime import datetime
-from modules import E2EPointEmbedder, ModelWithInputEmbedder, SetPointEmbedder, WithEmbedderForCausalLM
+from modules import E2EPointEmbedder, SetPointEmbedder, WithEmbedderForCausalLM, FeatureSetEmbedder
 from expression_parser import ExpressionParser, safe_parse_e2e
 from eval_direct import r2_acc_mse
 
@@ -133,14 +133,45 @@ def main(config, checkpoint=None, resume=False, reset=False, overrides=None):
         print("Initializing SetPointEmbedder (set encoder) ...")
         hidden_size = model.config.hidden_size
         input_embedder = SetPointEmbedder(
-            max_input_dim=10,
+            max_input_dim=int(config.get("embedder_max_input_dim", 10)),
             hidden_size=hidden_size,
-            d_model=int(hidden_size // 2),
-            num_layers=2,
-            num_heads=8,
+            d_model=int(config.get("embedder_d_model", int(hidden_size // 2))),
+            num_layers=int(config.get("embedder_num_layers", 2)),
+            num_heads=int(config.get("embedder_num_heads", 8)),
             prefix_len=int(config.get("embedder_prefix_len", 16)),
             fourier_features=int(config.get("embedder_fourier_features", 0)),
             normalize=bool(config.get("embedder_normalize", True)),
+            append_stats=bool(config.get("embedder_append_stats", False)),
+            norm_center_only=bool(config.get("embedder_norm_center_only", False)),
+            norm_scale_only=bool(config.get("embedder_norm_scale_only", False)),
+        )
+        num_embedder_params = sum(p.numel() for p in input_embedder.parameters())
+        print(f"Input embedder parameters: {num_embedder_params:,}")
+
+        base_model = model
+        model = WithEmbedderForCausalLM(base_model.config, base_model, input_embedder)
+        model.update_embedder_config()
+        print(f"Wrapped model with input embedder (PreTrainedModel)")
+        print(f"Total parameters (model + embedder): {base_model.num_parameters() + num_embedder_params:,}")
+    elif input_embedder_type == "featurepool":
+        print("Initializing FeatureSetEmbedder (modular feature+pool) ...")
+        hidden_size = model.config.hidden_size
+        input_embedder = FeatureSetEmbedder(
+            max_input_dim=int(config.get("embedder_max_input_dim", 10)),
+            hidden_size=hidden_size,
+            d_model=int(config.get("embedder_d_model", int(hidden_size // 2))),
+            num_layers=int(config.get("embedder_num_layers", 2)),
+            num_heads=int(config.get("embedder_num_heads", 8)),
+            prefix_len=int(config.get("embedder_prefix_len", 16)),
+            use_raw_xy=bool(config.get("embedder_use_raw_xy", True)),
+            use_x_phases=bool(config.get("embedder_use_x_phases", False)),
+            use_logx_phases=bool(config.get("embedder_use_logx_phases", False)),
+            fourier_x_num=int(config.get("embedder_fourier_x_num", 32)),
+            fourier_logx_num=int(config.get("embedder_fourier_logx_num", 32)),
+            log_eps=float(config.get("embedder_log_eps", 1e-6)),
+            include_poly=bool(config.get("embedder_include_poly", False)),
+            pool_type=str(config.get("embedder_pool_type", "encoder")),
+            normalize=bool(config.get("embedder_normalize", False)),
         )
         num_embedder_params = sum(p.numel() for p in input_embedder.parameters())
         print(f"Input embedder parameters: {num_embedder_params:,}")

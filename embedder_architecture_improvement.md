@@ -94,3 +94,49 @@ Next Steps
 - Based on metrics, sweep Fourier features and prefix_len.
 - If promising, proceed to mixed-complexity subsets and then to the 100k run.
 
+
+---
+
+11/10 Update — Minimal Pooling + Phase Features Plan and Implementation
+
+Context Recap (from recent cycles)
+- Data and evaluation: large mixed-complexity direct datasets (e.g., `arith_100k_c05_*`) with smaller proxies (`arith_200_c05`, `arith_1k_c05`, `arith_10k_b3`). Evaluate with `eval_direct.py` (direct accuracy, R^2, MSE).
+- Round 1: SetPointEmbedder sweeps showed the single largest gain came from disabling normalization (`embedder_normalize=false`). Fourier features count (0/2/4), prefix length (8/16/24), and modest capacity changes had small effects.
+- Round 2: Confirmed trends. Cosine scheduler slightly better than constant. 80 epochs marginally improved loss but not accuracy. Normalization ablations (center-only, scale-only, normalize+append-stats) underperformed. Depth/heads tweaks were within seed noise. Seed 43 matched seed 42 behavior. Conclusion: preserving raw scale matters; embedder transformer depth is likely not the bottleneck; fourier_features as previously used didn’t move much.
+- Open questions: Is the embedder’s Transformer encoder needed at all (given the upper LM)? Would simpler, permutation-invariant pooling suffice? Are log-domain phase features on x helpful?
+
+Focused Hypothesis
+- What matters most: permutation-invariant compression to `prefix_len` (replace deep self-attn with a single pooling step), and richer but general features via sin/cos on x and on log|x|. Keep raw scale; avoid heavy hand-crafted polynomials that destabilize without clear benefit.
+
+Experiment Grid (Third Round)
+- Features (per-point):
+  - F1 RAW: raw `[x, y]` (scale preserved).
+  - F2 PHASES: sin/cos(ω·x) + sin/cos(ν·log(|x|+ε)) with deterministic log-spaced frequencies (no y phases).
+  - F3 COMBINED: RAW + PHASES.
+- Embedders (pooling):
+  - E1 ENCODER: per-point MLP → TransformerEncoder → cross-attn queries (current Set-style).
+  - E2 DSUM-K: per-point MLP → masked sum → map to `prefix_len` tokens via learned token embeddings.
+  - E3 XATTN-K: single cross-attn from `prefix_len` learned queries directly to per-point features (no self-attn).
+- 9 core runs: all F×E combinations.
+- +1 sanity: COMBINED + ENCODER with a small polynomial block `{x^2, y^2, xy}`. If it doesn’t help, we drop poly/abs/sign(y) for the longer runs.
+- Training defaults: `embedder_normalize=false`; same datasets/schedule as prior direct-set-small runs.
+
+Implementation Summary
+- New embedder: `FeatureSetEmbedder` (modules.py)
+  - Feature flags: `embedder_use_raw_xy`, `embedder_use_x_phases`, `embedder_use_logx_phases`, counts (`embedder_fourier_x_num`, `embedder_fourier_logx_num`), `embedder_log_eps`, and `embedder_include_poly`.
+  - Pooling: `embedder_pool_type ∈ {encoder, dsum, xattn}`.
+  - Preserves scale by default (`embedder_normalize=false`), supports `points_mask`.
+  - Output: `(B, prefix_len, hidden_size)` identical to existing embedder API.
+- Training integration (train.py): added `input_embedder: "featurepool"` path, wiring all config flags.
+- Config: `configs/direct-featurepool-small.json` (base), defaults to RAW + ENCODER (sanity matches prior behavior) and same dataset/training args style as direct-set-small.
+- Job suite (submit_jobs.sh): added a top section with the 9 core runs and the +1 poly sanity, expressed as `sbatch` lines with CLI `-o` overrides.
+
+Rationale for Feature Choices
+- Keep raw x,y for scale and signal; no normalization. No phases on y to avoid entangling target scale patterns; upper model can learn mappings from y.
+- Log-domain phases on x capture multiplicative/power-law behaviors and stabilize across magnitudes. Deterministic frequency banks (log-spaced) reduce complexity versus learnable frequencies for this sweep.
+- Minimal pooling tests whether deep self-attn in the embedder is necessary; `xattn` and `dsum` provide permutation-invariant compression with a single operation.
+
+Next Steps
+- Run the 9+1 short experiments (4h budget) on the small/medium sets to select top 3–4.
+- Follow with 12h confirmatory runs on a larger mixed-complexity dataset (e.g., 10k–50k slice or standard 10k b3), logging direct accuracy and R^2, plus params/throughput.
+- If phases help, carry forward COMBINED + XATTN (and the best minimal pooler) to final comparisons against the original ENCODER baseline.

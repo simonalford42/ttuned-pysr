@@ -3,7 +3,7 @@
   "seed": 42,
   "input_embedder": "e2e",
   "data_dir": "",
-  "train_file": "datasets/training/gen10_20251106_162713_arith_1k_c05_20251016_214231_ancs.jsonl",
+  "train_file": "datasets/training/gen1k_arith_1k_c05_20251016_214231_ancs.jsonl",
   "val_file": "datasets/training/gen10_20251030_221355_arith_50_c05_20251023_215035_ancs.jsonl",
   "model_config": "configs/gpt-neo-tiny.json",
   "num_train": -1,

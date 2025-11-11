@@ -11,9 +11,9 @@
 #SBATCH --cpus-per-task=4
 #SBATCH --requeue
 #SBATCH --mem=50G
-#SBATCH --gres=gpu:nvidia_rtx_a6000:2
-#SBATCH --partition=ellis
-#SBATCH --time=72:00:00
+#SBATCH --gres=gpu:1
+#SBATCH --partition=gpu
+#SBATCH --time=24:00:00
 
 source /home/sca63/mambaforge/etc/profile.d/conda.sh
 conda activate ttsr

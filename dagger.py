@@ -1,12 +1,11 @@
 from generate_traces import generate_traces_from_expressions
-from convert_data import convert_and_make_split
+from convert_data import convert_and_make_split, add_expert_labels_to_traces
 import json
 import random
 import train
 from utils import load_jsonl, save_jsonl, Timing
 import shutil
 import argparse
-from dagger_relabel import add_expert_labels_to_traces
 
 def run_dagger(
     num_iterations: int,
@@ -26,7 +25,7 @@ def run_dagger(
         print("No checkpoint provided, training initial model from scratch.")
         with Timing("Trained neural network"):
             checkpoint = train.main(
-                config_path="training/configs/dagger.json",
+                config="configs/dagger.json",
             )
 
     for i in range(num_iterations):
@@ -77,7 +76,7 @@ def run_dagger(
             with Timing("Trained neural network"):
                 # continue training model on new dataset
                 checkpoint = train.main(
-                    config_path="training/configs/dagger.json",
+                    config_path="configs/dagger.json",
                     reset=True,
                     checkpoint=checkpoint,
                 )
@@ -99,10 +98,10 @@ def combine_datasets(old_data_path, new_data_path, filename):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Run the DAgger loop to iteratively generate traces and fine-tune the model.")
     parser.add_argument("--num_iterations", type=int, default=5, help="Number of DAgger iterations to run.")
-    parser.add_argument("--checkpoint", type=str, default="", help="Path to model checkpoint to start from.")
-    parser.add_argument("--expressions_file", type=str, required=True, help="Path to the expressions file used to generate traces.")
+    parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint to start from.")
+    parser.add_argument("--expressions_file", type=str, default="datasets/expressions/arith_1k_c05_20251016_214231.pkl.gz", help="Path to the expressions file used to generate traces.")
     parser.add_argument("--num_expressions", type=int, default=100, help="Number of expressions to generate per iteration.")
-    parser.add_argument("--num_generations", type=int, default=10, help="Number of generations for the trace generator.")
+    parser.add_argument("--num_generations", type=int, default=100, help="Number of generations for the trace generator.")
     parser.add_argument("--original_dataset", type=str, required=True, help="Path to the original dataset jsonl file.")
     parser.add_argument("--seed", type=int, default=42, help="Random seed for reproducibility.")
 
